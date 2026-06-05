@@ -1,14 +1,14 @@
-# Contributing to Permaweb Deploy
+# Contributing to ARIO Deploy
 
-Thank you for your interest in contributing to Permaweb Deploy! This document provides guidelines and instructions for contributing.
+Thank you for your interest in contributing to ARIO Deploy! This document provides guidelines and instructions for contributing.
 
 ## Development Setup
 
 1. **Fork and Clone**
 
    ```bash
-   git clone https://github.com/YOUR_USERNAME/permaweb-deploy.git
-   cd permaweb-deploy
+   git clone https://github.com/YOUR_USERNAME/ar-io-deploy.git
+   cd ar-io-deploy
    ```
 
 2. **Install Dependencies**

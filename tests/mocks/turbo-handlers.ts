@@ -282,9 +282,9 @@ export const turboPaymentHandlers = [
 export const aoHandlers = [
   // AO dry-run endpoint - used for reading contract state (getArNSRecord, etc.)
   http.post('https://cu.ardrive.io/dry-run', async ({ request }) => {
-    const body = (await request.json()) as any
+    const body = (await request.json()) as { Tags?: Array<{ name: string; value: string }> }
     const tags = body?.Tags || []
-    const action = tags.find((t: any) => t.name === 'Action')?.value
+    const action = tags.find((t) => t.name === 'Action')?.value
 
     // Handle ArNS record lookup
     if (action === 'Record') {

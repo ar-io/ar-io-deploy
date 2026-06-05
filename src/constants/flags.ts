@@ -1,14 +1,11 @@
-import { ARIO_MAINNET_PROCESS_ID } from '@ar.io/sdk'
 import { Flags } from '@oclif/core'
 
-import { promptArioProcess, promptArnsName } from '../prompts/arns.js'
+import { promptArnsName, promptCluster } from '../prompts/arns.js'
 import { promptDeployTarget } from '../prompts/deployment.js'
 import { promptSignerType } from '../prompts/wallet.js'
 import { createFlagConfig, type ResolvedConfig } from '../utils/config-resolver.js'
 import { TTL_MAX, TTL_MIN } from '../utils/constants.js'
 import {
-  resolveArioProcess,
-  validateArioProcess,
   validateFileExists,
   validateFolderExists,
   validateTtl,
@@ -21,23 +18,6 @@ import { DEFAULT_CACHE_MAX_ENTRIES } from './cache.js'
  * Each flag includes its oclif definition and optional prompt function
  */
 export const globalFlags = {
-  arioProcess: createFlagConfig<string>({
-    flag: Flags.string({
-      char: 'p',
-      default: ARIO_MAINNET_PROCESS_ID,
-      description: 'The ARIO process to use (mainnet, testnet, or process ID)',
-      async parse(input) {
-        const validation = validateArioProcess(input)
-        if (validation !== true) {
-          throw new Error(validation)
-        }
-
-        return resolveArioProcess(input)
-      },
-      required: false,
-    }),
-    prompt: promptArioProcess,
-  }),
   arnsName: createFlagConfig<string>({
     flag: Flags.string({
       char: 'n',
@@ -46,6 +26,16 @@ export const globalFlags = {
     }),
     prompt: promptArnsName,
     triggersInteractive: true,
+  }),
+  cluster: createFlagConfig<string>({
+    flag: Flags.string({
+      char: 'p',
+      default: 'mainnet',
+      description: 'Solana cluster for ArNS updates (mainnet or devnet)',
+      options: ['mainnet', 'devnet'],
+      required: false,
+    }),
+    prompt: promptCluster,
   }),
   dedupeCacheMaxEntries: createFlagConfig<number>({
     flag: Flags.integer({
@@ -94,45 +84,6 @@ export const globalFlags = {
       return target.type === 'folder' ? target.path : './dist'
     },
   }),
-  hyperbeamAoStateUrl: createFlagConfig<string>({
-    flag: Flags.string({
-      default: 'https://state.forward.computer',
-      description: 'AO state endpoint used to wait for HyperBEAM auto-fund transfer assignment.',
-      required: false,
-    }),
-  }),
-  hyperbeamAutoFund: createFlagConfig<boolean>({
-    flag: Flags.boolean({
-      default: false,
-      description: 'Automatically fund the HyperBEAM local ledger before upload.',
-      required: false,
-    }),
-  }),
-  hyperbeamFundAmount: createFlagConfig<string | undefined>({
-    flag: Flags.string({
-      description: 'Optional minimum HyperBEAM local ledger balance override, in token base units.',
-      required: false,
-    }),
-  }),
-  hyperbeamLedgerId: createFlagConfig<string | undefined>({
-    flag: Flags.string({
-      description: 'Advanced: local HyperBEAM ledger ID to use for AO auto-funding.',
-      required: false,
-    }),
-  }),
-  hyperbeamTokenId: createFlagConfig<string | undefined>({
-    flag: Flags.string({
-      description: 'Advanced: AO token process ID to use for HyperBEAM auto-funding.',
-      required: false,
-    }),
-  }),
-  hyperbeamUploadPath: createFlagConfig<string>({
-    flag: Flags.string({
-      default: '/~bundler@1.0/item?codec-device=ans104@1.0',
-      description: 'HyperBEAM bundler route used when --uploader-type hyperbeam is set.',
-      required: false,
-    }),
-  }),
   // Advanced payment settings
   maxTokenAmount: createFlagConfig<string | undefined>({
     flag: Flags.string({
@@ -157,8 +108,15 @@ export const globalFlags = {
   privateKey: createFlagConfig<string | undefined>({
     flag: Flags.string({
       char: 'k',
-      description: 'Private key or JWK JSON string (alternative to --wallet)',
+      description:
+        'Private key string (alternative to --wallet). JWK JSON for Arweave, hex for EVM chains, base58 secret key for Solana.',
       exclusive: ['wallet'],
+      required: false,
+    }),
+  }),
+  rpcUrl: createFlagConfig<string | undefined>({
+    flag: Flags.string({
+      description: 'Optional Solana RPC URL override for ArNS updates',
       required: false,
     }),
   }),
@@ -166,8 +124,8 @@ export const globalFlags = {
     flag: Flags.string({
       char: 's',
       default: 'arweave',
-      description: 'Signer type for deployment',
-      options: ['arweave', 'ethereum', 'polygon', 'kyve'],
+      description: 'Signer type for deployment. ArNS updates require solana.',
+      options: ['arweave', 'ethereum', 'polygon', 'kyve', 'solana'],
       required: false,
     }),
     prompt: promptSignerType,
@@ -207,16 +165,7 @@ export const globalFlags = {
   uploader: createFlagConfig<string | undefined>({
     flag: Flags.string({
       description:
-        'Base URL of the bundler service to use. For Turbo, omit for ArDrive production: https://upload.ardrive.io. For HyperBEAM, pass the node URL, for example https://hyperbeam.example.com.',
-      required: false,
-    }),
-  }),
-  uploaderType: createFlagConfig<string>({
-    flag: Flags.string({
-      default: 'turbo',
-      description:
-        'Uploader protocol to use. turbo uses the Turbo bundler API; hyperbeam signs ANS-104 items and posts them to a HyperBEAM bundler route.',
-      options: ['turbo', 'hyperbeam'],
+        'Custom Turbo upload service base URL. Omit for ArDrive production: https://upload.ardrive.io.',
       required: false,
     }),
   }),
@@ -230,7 +179,8 @@ export const globalFlags = {
   wallet: createFlagConfig<string | undefined>({
     flag: Flags.string({
       char: 'w',
-      description: 'Path to wallet file (JWK for Arweave, private key for others)',
+      description:
+        'Path to wallet file (JWK for Arweave, private key for EVM chains, solana-keygen id.json for Solana)',
       exclusive: ['private-key'],
       async parse(input) {
         const validation = validateFileExists(input)
@@ -249,26 +199,20 @@ export const globalFlags = {
  * Complete set of flags for the deploy command
  */
 export const deployFlags = {
-  'ario-process': globalFlags.arioProcess.flag,
   'arns-name': globalFlags.arnsName.flag,
+  cluster: globalFlags.cluster.flag,
   'dedupe-cache-max-entries': globalFlags.dedupeCacheMaxEntries.flag,
   'deploy-file': globalFlags.deployFile.flag,
   'deploy-folder': globalFlags.deployFolder.flag,
-  'hyperbeam-ao-state-url': globalFlags.hyperbeamAoStateUrl.flag,
-  'hyperbeam-auto-fund': globalFlags.hyperbeamAutoFund.flag,
-  'hyperbeam-fund-amount': globalFlags.hyperbeamFundAmount.flag,
-  'hyperbeam-ledger-id': globalFlags.hyperbeamLedgerId.flag,
-  'hyperbeam-token-id': globalFlags.hyperbeamTokenId.flag,
-  'hyperbeam-upload-path': globalFlags.hyperbeamUploadPath.flag,
   'max-token-amount': globalFlags.maxTokenAmount.flag,
   'no-dedupe': globalFlags.noDedupe.flag,
   'on-demand': globalFlags.onDemand.flag,
   'private-key': globalFlags.privateKey.flag,
+  'rpc-url': globalFlags.rpcUrl.flag,
   'sig-type': globalFlags.sigType.flag,
   'ttl-seconds': globalFlags.ttlSeconds.flag,
   undername: globalFlags.undername.flag,
   uploader: globalFlags.uploader.flag,
-  'uploader-type': globalFlags.uploaderType.flag,
   'use-arns': globalFlags.useArns.flag,
   wallet: globalFlags.wallet.flag,
 }
@@ -277,8 +221,9 @@ export const deployFlags = {
  * ArNS-specific flags (subset of deploy flags)
  */
 export const arnsFlags = {
-  'ario-process': globalFlags.arioProcess.flag,
   'arns-name': globalFlags.arnsName.flag,
+  cluster: globalFlags.cluster.flag,
+  'rpc-url': globalFlags.rpcUrl.flag,
   'ttl-seconds': globalFlags.ttlSeconds.flag,
   undername: globalFlags.undername.flag,
 }
@@ -296,27 +241,21 @@ export const walletFlags = {
  * Deploy command configuration type
  */
 export interface DeployConfig {
-  'ario-process': string
   'arns-name'?: string
+  cluster: string
   'dedupe-cache-max-entries': number
   'deploy-file'?: string
   'deploy-folder': string
-  'hyperbeam-ao-state-url': string
-  'hyperbeam-auto-fund': boolean
-  'hyperbeam-fund-amount'?: string
-  'hyperbeam-ledger-id'?: string
-  'hyperbeam-token-id'?: string
-  'hyperbeam-upload-path': string
   'max-token-amount'?: string
   'no-dedupe': boolean
   'on-demand'?: string
   'private-key'?: string
+  'rpc-url'?: string
   'sig-type': string
   'ttl-seconds': string
   undername: string
   'use-arns': boolean
   uploader?: string
-  'uploader-type': string
   wallet?: string
 }
 
@@ -325,26 +264,20 @@ export interface DeployConfig {
  * Maps kebab-case flag names to their camelCase globalFlags definitions
  */
 export const deployFlagConfigs = {
-  'ario-process': globalFlags.arioProcess,
   'arns-name': globalFlags.arnsName,
+  cluster: globalFlags.cluster,
   'dedupe-cache-max-entries': globalFlags.dedupeCacheMaxEntries,
   'deploy-file': globalFlags.deployFile,
   'deploy-folder': globalFlags.deployFolder,
-  'hyperbeam-ao-state-url': globalFlags.hyperbeamAoStateUrl,
-  'hyperbeam-auto-fund': globalFlags.hyperbeamAutoFund,
-  'hyperbeam-fund-amount': globalFlags.hyperbeamFundAmount,
-  'hyperbeam-ledger-id': globalFlags.hyperbeamLedgerId,
-  'hyperbeam-token-id': globalFlags.hyperbeamTokenId,
-  'hyperbeam-upload-path': globalFlags.hyperbeamUploadPath,
   'max-token-amount': globalFlags.maxTokenAmount,
   'no-dedupe': globalFlags.noDedupe,
   'on-demand': globalFlags.onDemand,
   'private-key': globalFlags.privateKey,
+  'rpc-url': globalFlags.rpcUrl,
   'sig-type': globalFlags.sigType,
   'ttl-seconds': globalFlags.ttlSeconds,
   undername: globalFlags.undername,
   uploader: globalFlags.uploader,
-  'uploader-type': globalFlags.uploaderType,
   'use-arns': globalFlags.useArns,
   wallet: globalFlags.wallet,
 } as const
@@ -356,19 +289,12 @@ export const uploadFlagConfigs = {
   'dedupe-cache-max-entries': globalFlags.dedupeCacheMaxEntries,
   'deploy-file': globalFlags.deployFile,
   'deploy-folder': globalFlags.deployFolder,
-  'hyperbeam-ao-state-url': globalFlags.hyperbeamAoStateUrl,
-  'hyperbeam-auto-fund': globalFlags.hyperbeamAutoFund,
-  'hyperbeam-fund-amount': globalFlags.hyperbeamFundAmount,
-  'hyperbeam-ledger-id': globalFlags.hyperbeamLedgerId,
-  'hyperbeam-token-id': globalFlags.hyperbeamTokenId,
-  'hyperbeam-upload-path': globalFlags.hyperbeamUploadPath,
   'max-token-amount': globalFlags.maxTokenAmount,
   'no-dedupe': globalFlags.noDedupe,
   'on-demand': globalFlags.onDemand,
   'private-key': globalFlags.privateKey,
   'sig-type': globalFlags.sigType,
   uploader: globalFlags.uploader,
-  'uploader-type': globalFlags.uploaderType,
   wallet: globalFlags.wallet,
 } as const
 

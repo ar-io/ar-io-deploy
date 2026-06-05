@@ -1,6 +1,6 @@
 # Testing
 
-This directory contains the test suite for `permaweb-deploy`.
+This directory contains the test suite for `ar-io-deploy`.
 
 ## Test Structure
 

@@ -1,20 +1,24 @@
 import fs from 'node:fs'
 
-import { ANT, AOProcess, ARIO } from '@ar.io/sdk'
+import { ARIO, SolanaANTWriteable } from '@ar.io/sdk'
 import { Command } from '@oclif/core'
-import { connect } from '@permaweb/aoconnect'
 import ora from 'ora'
 
 import { type DeployConfig, deployFlagConfigs } from '../constants/flags.js'
 import { promptAdvancedOptions } from '../prompts/arns.js'
 import { getWalletConfig } from '../prompts/wallet.js'
-import type { SignerType } from '../types/index.js'
 import { chalk } from '../utils/chalk.js'
 import { extractFlags, resolveConfig } from '../utils/config-resolver.js'
+import { deployKeyFromPrivateKey, deployKeyFromWalletFile } from '../utils/deploy-key.js'
 import { type DisplayRow, formatDisplayRows, formatUploadError } from '../utils/display.js'
-import { hyperbeamBundlerLink } from '../utils/hyperbeam-uploader.js'
 import { expandPath } from '../utils/path.js'
-import { createSigner } from '../utils/signer.js'
+import {
+  clusterProgramIds,
+  createArioRpc,
+  createArioRpcSubscriptions,
+  createSolanaArnsSigner,
+  type SolanaCluster,
+} from '../utils/solana.js'
 import { runUploadWorkflow } from '../workflows/upload-workflow.js'
 
 export default class Deploy extends Command {
@@ -26,9 +30,8 @@ export default class Deploy extends Command {
     '<%= config.bin %> deploy --wallet ./wallet.json',
     '<%= config.bin %> deploy --wallet ./wallet.json --deploy-folder ./dist',
     '<%= config.bin %> deploy --wallet ./wallet.json --deploy-file ./dist/index.html',
-    '<%= config.bin %> deploy --wallet ./wallet.json --uploader-type hyperbeam --uploader https://hyperbeam.example.com',
-    '<%= config.bin %> deploy --wallet ./wallet.json --use-arns --arns-name my-app',
-    '<%= config.bin %> deploy --wallet ./wallet.json --use-arns --arns-name my-app --undername staging',
+    '<%= config.bin %> deploy --wallet ./id.json --sig-type solana --use-arns --arns-name my-app',
+    '<%= config.bin %> deploy --wallet ./id.json --sig-type solana --use-arns --arns-name my-app --undername staging',
   ]
 
   static override flags = extractFlags(deployFlagConfigs)
@@ -68,7 +71,7 @@ export default class Deploy extends Command {
 
       let advancedOptions:
         | {
-            arioProcess: string
+            cluster: string
             maxTokenAmount?: string
             onDemand?: string
             ttlSeconds: string
@@ -86,32 +89,30 @@ export default class Deploy extends Command {
         : baseConfig['dedupe-cache-max-entries']
 
       const deployConfig: DeployConfig = {
-        'ario-process': advancedOptions?.arioProcess || baseConfig['ario-process'],
         'arns-name': baseConfig['arns-name'],
+        cluster: advancedOptions?.cluster || baseConfig.cluster,
         'dedupe-cache-max-entries': effectiveCacheMaxEntries,
         'deploy-file': baseConfig['deploy-file'],
         'deploy-folder': baseConfig['deploy-folder'],
-        'hyperbeam-ao-state-url': baseConfig['hyperbeam-ao-state-url'],
-        'hyperbeam-auto-fund': baseConfig['hyperbeam-auto-fund'],
-        'hyperbeam-fund-amount': baseConfig['hyperbeam-fund-amount'],
-        'hyperbeam-ledger-id': baseConfig['hyperbeam-ledger-id'],
-        'hyperbeam-token-id': baseConfig['hyperbeam-token-id'],
-        'hyperbeam-upload-path': baseConfig['hyperbeam-upload-path'],
         'max-token-amount': advancedOptions?.maxTokenAmount || baseConfig['max-token-amount'],
         'no-dedupe': baseConfig['no-dedupe'],
         'on-demand': advancedOptions?.onDemand || baseConfig['on-demand'],
         'private-key': walletConfig.privateKey,
+        'rpc-url': baseConfig['rpc-url'],
         'sig-type': baseConfig['sig-type'],
         'ttl-seconds': advancedOptions?.ttlSeconds || baseConfig['ttl-seconds'],
         undername: advancedOptions?.undername || baseConfig.undername,
         uploader: baseConfig.uploader,
-        'uploader-type': baseConfig['uploader-type'],
         'use-arns': useArns,
         wallet: walletConfig.wallet,
       }
 
       if (interactive) {
         this.log('')
+      }
+
+      if (deployConfig['use-arns'] && deployConfig['sig-type'] !== 'solana') {
+        this.error('ArNS updates require --sig-type solana (ArNS records live on Solana)')
       }
 
       let deployKey: string
@@ -122,15 +123,9 @@ export default class Deploy extends Command {
         }
 
         const walletContent = fs.readFileSync(walletPath, 'utf8')
-        deployKey =
-          deployConfig['sig-type'] === 'arweave'
-            ? Buffer.from(walletContent).toString('base64')
-            : walletContent.trim()
+        deployKey = deployKeyFromWalletFile(deployConfig['sig-type'], walletContent)
       } else if (deployConfig['private-key']) {
-        deployKey =
-          deployConfig['sig-type'] === 'arweave'
-            ? Buffer.from(deployConfig['private-key']).toString('base64')
-            : deployConfig['private-key'].trim()
+        deployKey = deployKeyFromPrivateKey(deployConfig['sig-type'], deployConfig['private-key'])
       } else {
         deployKey = process.env.DEPLOY_KEY || ''
         if (!deployKey) {
@@ -153,25 +148,9 @@ export default class Deploy extends Command {
 
           this.log('')
 
-          const bundlerLink =
-            deployConfig['uploader-type'] === 'hyperbeam' && deployConfig.uploader
-              ? hyperbeamBundlerLink(
-                  deployConfig.uploader,
-                  txOrManifestId,
-                  !deployConfig['deploy-file'],
-                )
-              : undefined
-
           const rows: DisplayRow[] = [['Tx ID', chalk.green(txOrManifestId)]]
           if (deployConfig.uploader) {
-            rows.push(
-              ['Bundler service', chalk.cyan(deployConfig.uploader)],
-              ['Uploader type', chalk.cyan(deployConfig['uploader-type'])],
-            )
-          }
-
-          if (bundlerLink) {
-            rows.push(['Bundler link', chalk.yellow(bundlerLink)])
+            rows.push(['Bundler service', chalk.cyan(deployConfig.uploader)])
           }
 
           rows.push(['Arweave URL', chalk.yellow(`https://arweave.net/${txOrManifestId}`)])
@@ -182,7 +161,8 @@ export default class Deploy extends Command {
           return
         }
 
-        const arioProcess = deployConfig['ario-process']
+        const cluster = deployConfig.cluster as SolanaCluster
+        const rpcUrl = deployConfig['rpc-url']
         const arnsName = deployConfig['arns-name']
         if (!arnsName) {
           this.error('--use-arns requires --arns-name')
@@ -192,18 +172,9 @@ export default class Deploy extends Command {
 
         spinner.start('Initializing ARIO')
 
-        const ao = connect({
-          CU_URL: 'https://cu.ardrive.io',
-          MODE: 'legacy',
-          MU_URL: 'https://mu.ao-testnet.xyz',
-        })
-
-        const ario = ARIO.init({
-          process: new AOProcess({
-            ao,
-            processId: arioProcess,
-          }),
-        })
+        const programIds = clusterProgramIds(cluster)
+        const rpc = createArioRpc(cluster, rpcUrl)
+        const ario = ARIO.init({ rpc, ...programIds })
 
         spinner.succeed('ARIO initialized')
 
@@ -222,61 +193,36 @@ export default class Deploy extends Command {
         this.log('')
 
         spinner.start('Updating ANT record')
-        const { signer } = createSigner(deployConfig['sig-type'] as SignerType, deployKey)
-        const ant = ANT.init({ processId: arnsNameRecord.processId, signer })
+        const signer = await createSolanaArnsSigner(deployKey)
+        const ant = new SolanaANTWriteable({
+          processId: arnsNameRecord.processId,
+          rpc,
+          rpcSubscriptions: createArioRpcSubscriptions(cluster, rpcUrl),
+          signer,
+          ...(programIds.antProgramId ? { antProgramId: programIds.antProgramId } : {}),
+        })
 
-        await ant.setRecord(
-          {
-            transactionId: txOrManifestId,
-            ttlSeconds: Number.parseInt(deployConfig['ttl-seconds'], 10),
-            undername: deployConfig.undername,
-          },
-          {
-            tags: [
-              {
-                name: 'App-Name',
-                value: 'Permaweb-Deploy',
-              },
-              ...(process.env.GITHUB_SHA
-                ? [
-                    {
-                      name: 'GIT-HASH',
-                      value: process.env.GITHUB_SHA,
-                    },
-                  ]
-                : []),
-            ],
-          },
-        )
+        const recordParams = {
+          transactionId: txOrManifestId,
+          ttlSeconds: Number.parseInt(deployConfig['ttl-seconds'], 10),
+        }
+
+        await (deployConfig.undername === '@'
+          ? ant.setBaseNameRecord(recordParams)
+          : ant.setUndernameRecord({ ...recordParams, undername: deployConfig.undername }))
 
         spinner.succeed('ANT record updated')
 
-        const bundlerLink =
-          deployConfig['uploader-type'] === 'hyperbeam' && deployConfig.uploader
-            ? hyperbeamBundlerLink(
-                deployConfig.uploader,
-                txOrManifestId,
-                !deployConfig['deploy-file'],
-              )
-            : undefined
-
         const rows: DisplayRow[] = [['Tx ID', chalk.green(txOrManifestId)]]
         if (deployConfig.uploader) {
-          rows.push(
-            ['Bundler service', chalk.cyan(deployConfig.uploader)],
-            ['Uploader type', chalk.cyan(deployConfig['uploader-type'])],
-          )
-        }
-
-        if (bundlerLink) {
-          rows.push(['Bundler link', chalk.yellow(bundlerLink)])
+          rows.push(['Bundler service', chalk.cyan(deployConfig.uploader)])
         }
 
         rows.push(
           ['ArNS Name', chalk.yellow(arnsName)],
           ['Undername', chalk.yellow(deployConfig.undername)],
           ['ANT', chalk.cyan(arnsNameRecord.processId)],
-          ['ARIO Process', chalk.gray(arioProcess)],
+          ['Cluster', chalk.gray(cluster)],
           ['TTL Seconds', chalk.blue(deployConfig['ttl-seconds'])],
           ['Arweave URL', chalk.yellow(`https://arweave.net/${txOrManifestId}`)],
         )

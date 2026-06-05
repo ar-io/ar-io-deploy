@@ -1,10 +1,10 @@
 import type { Flag } from '@oclif/core/lib/interfaces'
 
-export type SignerType = 'arweave' | 'ethereum' | 'kyve' | 'polygon'
+export type SignerType = 'arweave' | 'ethereum' | 'kyve' | 'polygon' | 'solana'
 
 export interface DeployOptions {
-  'ario-process': string
   'arns-name'?: string
+  cluster: string
   'deploy-file': string
   'deploy-folder': string
   'private-key': string

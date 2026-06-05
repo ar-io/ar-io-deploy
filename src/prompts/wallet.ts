@@ -41,6 +41,7 @@ export async function promptSignerType(): Promise<string> {
       { name: 'Ethereum', value: 'ethereum' },
       { name: 'Polygon', value: 'polygon' },
       { name: 'KYVE', value: 'kyve' },
+      { name: 'Solana', value: 'solana' },
     ],
     default: 'arweave',
     message: 'Select signer type:',

@@ -1,5 +1,4 @@
-import { ArweaveSigner } from '@ar.io/sdk'
-import { EthereumSigner } from '@ardrive/turbo-sdk'
+import { ArweaveSigner, EthereumSigner, HexSolanaSigner } from '@ardrive/turbo-sdk'
 
 import type { SignerType } from '../types/index.js'
 
@@ -34,9 +33,16 @@ export function createSigner(sigType: SignerType, deployKey: string) {
       }
     }
 
+    case 'solana': {
+      return {
+        signer: new HexSolanaSigner(deployKey),
+        token: 'solana' as const,
+      }
+    }
+
     default: {
       throw new Error(
-        `Invalid sig-type provided: ${sigType}. Allowed values are 'arweave', 'ethereum', 'polygon', or 'kyve'.`,
+        `Invalid sig-type provided: ${sigType}. Allowed values are 'arweave', 'ethereum', 'polygon', 'kyve', or 'solana'.`,
       )
     }
   }

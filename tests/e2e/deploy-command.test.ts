@@ -1,6 +1,5 @@
 import { runCommand } from '@oclif/test'
-import { http, HttpResponse } from 'msw'
-import { beforeEach, describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vitest'
 
 import { TEST_ETH_PRIVATE_KEY } from '../constants.js'
 import { mockInsufficientBalance } from '../mocks/turbo-handlers.js'
@@ -39,10 +38,6 @@ describe(
         './tests/fixtures/test-app',
         '--wallet',
         './tests/fixtures/test_wallet.json',
-        '--arns-name',
-        'test-app',
-        '--undername',
-        '@',
         '--on-demand',
         'invalid-token',
         '--max-token-amount',
@@ -53,25 +48,6 @@ describe(
       expect(error?.message).toMatch(/ario|base-eth/)
     })
 
-    it('should reject invalid ario-process', async () => {
-      const result = await runCommand([
-        'deploy',
-        '--deploy-folder',
-        './tests/fixtures/test-app',
-        '--wallet',
-        './tests/fixtures/test_wallet.json',
-        '--arns-name',
-        'test-app',
-        '--undername',
-        '@',
-        '--ario-process',
-        'invalid',
-      ])
-
-      expect(result.error).toBeDefined()
-      expect(result.error?.message).toMatch(/valid Arweave transaction ID/)
-    })
-
     it('should reject invalid dedupe-cache-max-entries', async () => {
       const result = await runCommand([
         'deploy',
@@ -79,10 +55,6 @@ describe(
         './tests/fixtures/test-app',
         '--wallet',
         './tests/fixtures/test_wallet.json',
-        '--arns-name',
-        'test-app',
-        '--undername',
-        '@',
         '--dedupe-cache-max-entries',
         '-1',
       ])
@@ -98,10 +70,6 @@ describe(
         './tests/fixtures/test-app',
         '--wallet',
         './tests/fixtures/test_wallet.json',
-        '--arns-name',
-        'test-app',
-        '--undername',
-        '@',
         '--dedupe-cache-max-entries',
         '50',
       ])
@@ -116,10 +84,6 @@ describe(
         './tests/fixtures/test-app',
         '--wallet',
         './tests/fixtures/test_wallet.json',
-        '--arns-name',
-        'test-app',
-        '--undername',
-        '@',
         '--no-dedupe',
       ])
 
@@ -133,10 +97,6 @@ describe(
         './tests/fixtures/test-app',
         '--wallet',
         './tests/fixtures/test_wallet.json',
-        '--arns-name',
-        'test-app',
-        '--undername',
-        '@',
         '--dedupe-cache-max-entries',
         '0',
       ])
@@ -144,132 +104,28 @@ describe(
       expect(result.error).toBeUndefined()
     })
 
-    describe('hyperbeam uploader', () => {
-      beforeEach(() => {
-        server.use(
-          http.get('https://hyperbeam.test/~meta@1.0/info/address', () =>
-            HttpResponse.text('node-deposit-address'),
-          ),
-          http.get('https://hyperbeam.test/~meta@1.0/info/ao-payment-deposit-address', () =>
-            HttpResponse.text('node-deposit-address'),
-          ),
-          http.get('https://arweave.net/wallet/node-deposit-address/balance', () =>
-            HttpResponse.text('1'),
-          ),
-          http.get('https://hyperbeam.test/~arweave-byte-pricing@1.0/quote', () =>
-            HttpResponse.text('1000'),
-          ),
-        )
-      })
-
-      it('should upload a file through a HyperBEAM bundler route', async () => {
-        const seenUploads: Array<{ contentType: string; size: number }> = []
-
-        server.use(
-          http.post('https://hyperbeam.test/~bundler@1.0/item', async ({ request }) => {
-            const raw = Buffer.from(await request.arrayBuffer())
-            seenUploads.push({
-              contentType: request.headers.get('content-type') || '',
-              size: raw.length,
-            })
-
-            return new HttpResponse('<html><title>HyperBEAM</title></html>', {
-              headers: { id: 'mock-hyperbeam-dataitem-id' },
-              status: 200,
-            })
-          }),
-        )
-
+    describe('arns', () => {
+      it('should require --sig-type solana when updating ArNS', async () => {
         const result = await runCommand([
-          'upload',
-          '--deploy-file',
-          './tests/fixtures/test-app/index.html',
+          'deploy',
+          '--deploy-folder',
+          './tests/fixtures/test-app',
           '--wallet',
           './tests/fixtures/test_wallet.json',
-          '--uploader-type',
-          'hyperbeam',
-          '--uploader',
-          'https://hyperbeam.test',
-          '--no-dedupe',
-        ])
-
-        expect(result.error).toBeUndefined()
-        expect(seenUploads).toHaveLength(1)
-        expect(seenUploads[0].contentType).toBe('application/octet-stream')
-        expect(seenUploads[0].size).toBeGreaterThan(0)
-      })
-
-      it('should require an uploader URL for HyperBEAM uploads', async () => {
-        const { error } = await runCommand([
-          'upload',
-          '--deploy-file',
-          './tests/fixtures/test-app/index.html',
-          '--wallet',
-          './tests/fixtures/test_wallet.json',
-          '--uploader-type',
-          'hyperbeam',
-        ])
-
-        expect(error).toBeDefined()
-        expect(error?.message).toMatch(/require --uploader/)
-      })
-
-      it('should include AO funding metadata when a HyperBEAM upload needs payment', async () => {
-        server.use(
-          http.post('https://hyperbeam.test/~bundler@1.0/item', () =>
-            HttpResponse.text('insufficient local ledger balance', { status: 402 }),
-          ),
-        )
-
-        const result = await runCommand([
-          'upload',
-          '--deploy-file',
-          './tests/fixtures/test-app/index.html',
-          '--wallet',
-          './tests/fixtures/test_wallet.json',
-          '--uploader-type',
-          'hyperbeam',
-          '--uploader',
-          'https://hyperbeam.test',
-          '--no-dedupe',
+          '--use-arns',
+          '--arns-name',
+          'test-app',
         ])
 
         expect(result.error).toBeDefined()
-        expect(result.error?.message).toContain('node-deposit-address')
-        expect(result.error?.message).toContain('default')
+        expect(result.error?.message).toMatch(/ArNS updates require --sig-type solana/)
       })
 
-      it('should reject HyperBEAM uploads when the bundler wallet has no AR', async () => {
-        let uploadAttempted = false
-
-        server.use(
-          http.get('https://arweave.net/wallet/node-deposit-address/balance', () =>
-            HttpResponse.text('0'),
-          ),
-          http.post('https://hyperbeam.test/~bundler@1.0/item', () => {
-            uploadAttempted = true
-            return HttpResponse.text('should not upload', { status: 200 })
-          }),
-        )
-
-        const result = await runCommand([
-          'upload',
-          '--deploy-file',
-          './tests/fixtures/test-app/index.html',
-          '--wallet',
-          './tests/fixtures/test_wallet.json',
-          '--uploader-type',
-          'hyperbeam',
-          '--uploader',
-          'https://hyperbeam.test',
-          '--no-dedupe',
-        ])
-
-        expect(result.error).toBeDefined()
-        expect(result.error?.message).toContain('has 0 AR')
-        expect(result.error?.message).toContain('cannot seed data to Arweave')
-        expect(uploadAttempted).toBe(false)
-      })
+      // TODO: ArNS now resolves records and writes the ANT update through the
+      // Solana ARIO/ANT programs (see src/commands/deploy.ts). A happy-path test
+      // needs Solana RPC + program-account mocks (MSW JSON-RPC handlers for the
+      // configured cluster) which are not yet in place.
+      it.skip('should update an ArNS record on Solana', async () => {})
     })
 
     describe('arweave signer', () => {
@@ -281,10 +137,6 @@ describe(
             './tests/fixtures/test-app',
             '--wallet',
             './tests/fixtures/test_wallet.json',
-            '--arns-name',
-            'test-app',
-            '--undername',
-            '@',
           ])
 
           expect(result.error).toBeUndefined()
@@ -297,10 +149,6 @@ describe(
             './tests/fixtures/test-app',
             '--wallet',
             './tests/fixtures/test_wallet.json',
-            '--arns-name',
-            'test-app',
-            '--undername',
-            '@',
             '--on-demand',
             'ario',
             '--max-token-amount',
@@ -317,10 +165,6 @@ describe(
             './tests/fixtures/test-app',
             '--wallet',
             './tests/fixtures/test_wallet.json',
-            '--arns-name',
-            'test-app',
-            '--undername',
-            '@',
             '--on-demand',
             'base-eth',
             '--max-token-amount',
@@ -339,10 +183,6 @@ describe(
             './tests/fixtures/test-app/index.html',
             '--wallet',
             './tests/fixtures/test_wallet.json',
-            '--arns-name',
-            'test-app',
-            '--undername',
-            '@',
           ])
 
           expect(result.error).toBeUndefined()
@@ -355,10 +195,6 @@ describe(
             './tests/fixtures/test-app/index.html',
             '--wallet',
             './tests/fixtures/test_wallet.json',
-            '--arns-name',
-            'test-app',
-            '--undername',
-            '@',
             '--on-demand',
             'ario',
             '--max-token-amount',
@@ -375,10 +211,6 @@ describe(
             './tests/fixtures/test-app/index.html',
             '--wallet',
             './tests/fixtures/test_wallet.json',
-            '--arns-name',
-            'test-app',
-            '--undername',
-            '@',
             '--on-demand',
             'base-eth',
             '--max-token-amount',
@@ -401,10 +233,6 @@ describe(
             'ethereum',
             '--private-key',
             TEST_ETH_PRIVATE_KEY,
-            '--arns-name',
-            'test-app',
-            '--undername',
-            '@',
           ])
 
           expect(result.error).toBeUndefined()
@@ -419,10 +247,6 @@ describe(
             'ethereum',
             '--private-key',
             TEST_ETH_PRIVATE_KEY,
-            '--arns-name',
-            'test-app',
-            '--undername',
-            '@',
             '--on-demand',
             'base-eth',
             '--max-token-amount',
@@ -443,10 +267,6 @@ describe(
             'ethereum',
             '--private-key',
             TEST_ETH_PRIVATE_KEY,
-            '--arns-name',
-            'test-app',
-            '--undername',
-            '@',
           ])
 
           expect(result.error).toBeUndefined()
@@ -461,10 +281,6 @@ describe(
             'ethereum',
             '--private-key',
             TEST_ETH_PRIVATE_KEY,
-            '--arns-name',
-            'test-app',
-            '--undername',
-            '@',
             '--on-demand',
             'base-eth',
             '--max-token-amount',
@@ -482,7 +298,7 @@ describe(
         const path = await import('node:path')
 
         // Clean up any existing cache
-        const cacheDir = path.join(process.cwd(), '.permaweb-deploy')
+        const cacheDir = path.join(process.cwd(), '.ario-deploy')
         if (fs.existsSync(cacheDir)) {
           fs.rmSync(cacheDir, { force: true, recursive: true })
         }
@@ -494,10 +310,6 @@ describe(
           './tests/fixtures/test-app/index.html',
           '--wallet',
           './tests/fixtures/test_wallet.json',
-          '--arns-name',
-          'test-app',
-          '--undername',
-          '@',
           '--dedupe-cache-max-entries',
           '10',
         ])
@@ -519,10 +331,6 @@ describe(
           './tests/fixtures/test-app/index.html',
           '--wallet',
           './tests/fixtures/test_wallet.json',
-          '--arns-name',
-          'test-app',
-          '--undername',
-          '@',
           '--dedupe-cache-max-entries',
           '10',
         ])
@@ -544,7 +352,7 @@ describe(
         const path = await import('node:path')
 
         // Clean up any existing cache
-        const cacheDir = path.join(process.cwd(), '.permaweb-deploy')
+        const cacheDir = path.join(process.cwd(), '.ario-deploy')
         if (fs.existsSync(cacheDir)) {
           fs.rmSync(cacheDir, { force: true, recursive: true })
         }
@@ -556,10 +364,6 @@ describe(
           './tests/fixtures/test-app',
           '--wallet',
           './tests/fixtures/test_wallet.json',
-          '--arns-name',
-          'test-app',
-          '--undername',
-          '@',
           '--dedupe-cache-max-entries',
           '10',
         ])
@@ -582,10 +386,6 @@ describe(
           './tests/fixtures/test-app',
           '--wallet',
           './tests/fixtures/test_wallet.json',
-          '--arns-name',
-          'test-app',
-          '--undername',
-          '@',
           '--dedupe-cache-max-entries',
           '10',
         ])
@@ -607,7 +407,7 @@ describe(
         const path = await import('node:path')
 
         // Clean up any existing cache
-        const cacheDir = path.join(process.cwd(), '.permaweb-deploy')
+        const cacheDir = path.join(process.cwd(), '.ario-deploy')
         if (fs.existsSync(cacheDir)) {
           fs.rmSync(cacheDir, { force: true, recursive: true })
         }
@@ -619,10 +419,6 @@ describe(
           './tests/fixtures/test-app/index.html',
           '--wallet',
           './tests/fixtures/test_wallet.json',
-          '--arns-name',
-          'test-app',
-          '--undername',
-          '@',
           '--no-dedupe',
         ])
 
@@ -643,7 +439,7 @@ describe(
         const path = await import('node:path')
 
         // Clean up any existing cache
-        const cacheDir = path.join(process.cwd(), '.permaweb-deploy')
+        const cacheDir = path.join(process.cwd(), '.ario-deploy')
         if (fs.existsSync(cacheDir)) {
           fs.rmSync(cacheDir, { force: true, recursive: true })
         }
@@ -655,10 +451,6 @@ describe(
           './tests/fixtures/test-app',
           '--wallet',
           './tests/fixtures/test_wallet.json',
-          '--arns-name',
-          'test-app',
-          '--undername',
-          '@',
           '--dedupe-cache-max-entries',
           '0',
         ])
@@ -696,10 +488,6 @@ describe(
             largeFilePath,
             '--wallet',
             './tests/fixtures/test_wallet.json',
-            '--arns-name',
-            'test-app',
-            '--undername',
-            '@',
           ])
 
           expect(error).toBeDefined()
@@ -739,10 +527,6 @@ describe(
             largeFolderPath,
             '--wallet',
             './tests/fixtures/test_wallet.json',
-            '--arns-name',
-            'test-app',
-            '--undername',
-            '@',
           ])
 
           expect(error).toBeDefined()

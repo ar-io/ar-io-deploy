@@ -1,12 +1,12 @@
 {
-  "name": "permaweb-deploy",
-  "version": "3.4.6",
-  "description": "Permaweb App Deployment Package",
+  "name": "@ar.io/deploy",
+  "version": "0.0.0",
+  "description": "ARIO Deploy — CLI for deploying apps to the permaweb (Arweave) and updating ArNS",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "type": "module",
   "bin": {
-    "permaweb-deploy": "./bin/run.js"
+    "ario-deploy": "./bin/run.js"
   },
   "scripts": {
     "clean:install": "rm -rf node_modules pnpm-lock.yaml || true && pnpm store prune && pnpm install",
@@ -32,8 +32,8 @@
     "release:snapshot": "changeset publish --tag rc --no-git-tag"
   },
   "oclif": {
-    "bin": "permaweb-deploy",
-    "dirname": "permaweb-deploy",
+    "bin": "ario-deploy",
+    "dirname": "ario-deploy",
     "commands": "./dist/commands",
     "topicSeparator": " ",
     "default": "interactive",
@@ -52,13 +52,13 @@
     "oclif.manifest.json"
   ],
   "dependencies": {
-    "@ar.io/sdk": "^3.22.1",
-    "@ardrive/turbo-sdk": "^1.39.1",
+    "@ar.io/sdk": "4.0.0-solana.38",
+    "@ardrive/turbo-sdk": "^1.41.3",
     "@dha-team/arbundles": "^1.0.4",
     "@inquirer/prompts": "^7.2.0",
     "@oclif/core": "^4.0.30",
-    "@permaweb/aoconnect": "^0.0.85",
-    "hyperbalance": "github:xylophonez/hyperbalance#main",
+    "@solana/kit": "^6.9.0",
+    "bs58": "^6.0.0",
     "mime-types": "^3.0.1",
     "ora": "^8.1.1",
     "p-limit": "^7.2.0"
@@ -103,14 +103,14 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/permaweb/permaweb-deploy.git"
+    "url": "git+https://github.com/ar-io/ar-io-deploy.git"
   },
-  "author": "NickJ202",
-  "license": "ISC",
+  "author": "Permanent Data Solutions, Inc.",
+  "license": "MIT",
   "bugs": {
-    "url": "https://github.com/permaweb/permaweb-deploy/issues"
+    "url": "https://github.com/ar-io/ar-io-deploy/issues"
   },
-  "homepage": "https://github.com/permaweb/permaweb-deploy#readme",
+  "homepage": "https://github.com/ar-io/ar-io-deploy#readme",
   "lint-staged": {
     "{src,tests}/**/*.{ts,tsx}": [
       "eslint --fix --max-warnings=0",

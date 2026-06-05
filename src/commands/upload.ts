@@ -6,6 +6,7 @@ import { type UploadConfig, uploadFlagConfigs } from '../constants/flags.js'
 import { getWalletConfig } from '../prompts/wallet.js'
 import { chalk } from '../utils/chalk.js'
 import { extractFlags, resolveConfig } from '../utils/config-resolver.js'
+import { deployKeyFromPrivateKey, deployKeyFromWalletFile } from '../utils/deploy-key.js'
 import {
   type DisplayRow,
   formatDisplayRows,
@@ -13,7 +14,6 @@ import {
   formatUploadError,
   formatUploadSize,
 } from '../utils/display.js'
-import { hyperbeamBundlerLink } from '../utils/hyperbeam-uploader.js'
 import { expandPath } from '../utils/path.js'
 import { runUploadWorkflow } from '../workflows/upload-workflow.js'
 
@@ -28,7 +28,7 @@ export default class Upload extends Command {
     '<%= config.bin %> upload --wallet ./wallet.json --deploy-file ./dist/index.html',
     '<%= config.bin %> upload --private-key "$(cat wallet.json)" --on-demand ario --max-token-amount 1.5',
     '<%= config.bin %> upload --wallet ./wallet.json --uploader https://up.arweave.net',
-    '<%= config.bin %> upload --wallet ./wallet.json --uploader-type hyperbeam --uploader https://hyperbeam.example.com',
+    '<%= config.bin %> upload --wallet ./id.json --sig-type solana',
   ]
 
   static override flags = extractFlags(uploadFlagConfigs)
@@ -68,17 +68,10 @@ export default class Upload extends Command {
         'dedupe-cache-max-entries': effectiveCacheMaxEntries,
         'deploy-file': baseConfig['deploy-file'],
         'deploy-folder': baseConfig['deploy-folder'],
-        'hyperbeam-ao-state-url': baseConfig['hyperbeam-ao-state-url'],
-        'hyperbeam-auto-fund': baseConfig['hyperbeam-auto-fund'],
-        'hyperbeam-fund-amount': baseConfig['hyperbeam-fund-amount'],
-        'hyperbeam-ledger-id': baseConfig['hyperbeam-ledger-id'],
-        'hyperbeam-token-id': baseConfig['hyperbeam-token-id'],
-        'hyperbeam-upload-path': baseConfig['hyperbeam-upload-path'],
         'max-token-amount': baseConfig['max-token-amount'],
         'on-demand': baseConfig['on-demand'],
         'sig-type': baseConfig['sig-type'],
         uploader: baseConfig.uploader,
-        'uploader-type': baseConfig['uploader-type'],
       }
 
       if (interactive) {
@@ -96,13 +89,9 @@ export default class Upload extends Command {
         }
 
         const walletContent = fs.readFileSync(walletPath, 'utf8')
-        deployKey =
-          sigType === 'arweave'
-            ? Buffer.from(walletContent).toString('base64')
-            : walletContent.trim()
+        deployKey = deployKeyFromWalletFile(sigType, walletContent)
       } else if (privateKey) {
-        deployKey =
-          sigType === 'arweave' ? Buffer.from(privateKey).toString('base64') : privateKey.trim()
+        deployKey = deployKeyFromPrivateKey(sigType, privateKey)
       } else {
         deployKey = process.env.DEPLOY_KEY || ''
         if (!deployKey) {
@@ -123,10 +112,6 @@ export default class Upload extends Command {
         this.log('')
 
         const uploadSize = uploadResult.size
-        const bundlerLink =
-          uploadCfg['uploader-type'] === 'hyperbeam' && uploadCfg.uploader
-            ? hyperbeamBundlerLink(uploadCfg.uploader, txOrManifestId, !uploadCfg['deploy-file'])
-            : undefined
 
         const rows: DisplayRow[] = [['Tx ID', chalk.green(txOrManifestId)]]
         if (uploadSize) {
@@ -138,14 +123,7 @@ export default class Upload extends Command {
         }
 
         if (uploadCfg.uploader) {
-          rows.push(
-            ['Bundler service', chalk.cyan(uploadCfg.uploader)],
-            ['Uploader type', chalk.cyan(uploadCfg['uploader-type'])],
-          )
-        }
-
-        if (bundlerLink) {
-          rows.push(['Bundler link', chalk.yellow(bundlerLink)])
+          rows.push(['Bundler service', chalk.cyan(uploadCfg.uploader)])
         }
 
         rows.push(['Arweave URL', chalk.yellow(`https://arweave.net/${txOrManifestId}`)])

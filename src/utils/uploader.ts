@@ -13,7 +13,7 @@ import {
   touchCacheEntry,
   type TransactionCache,
 } from './cache.js'
-import type { UploadClient, UploadCost, UploadSize } from './hyperbeam-uploader.js'
+import type { UploadClient, UploadCost, UploadSize } from './upload-types.js'
 
 export interface UploadResult {
   cacheHit: boolean
@@ -64,7 +64,7 @@ export async function uploadFile(
       tags: [
         {
           name: 'App-Name',
-          value: 'Permaweb-Deploy',
+          value: 'ARIO-Deploy',
         },
         {
           name: 'anchor',
@@ -183,7 +183,7 @@ export async function uploadFolder(
         const uploadResult = await turbo.uploadFile({
           dataItemOpts: {
             tags: [
-              { name: 'App-Name', value: 'Permaweb-Deploy' },
+              { name: 'App-Name', value: 'ARIO-Deploy' },
               { name: 'Content-Type', value: mimeType },
             ],
           },
@@ -259,7 +259,7 @@ export async function uploadFolder(
   const manifestUploadResult = await turbo.uploadFile({
     dataItemOpts: {
       tags: [
-        { name: 'App-Name', value: 'Permaweb-Deploy' },
+        { name: 'App-Name', value: 'ARIO-Deploy' },
         { name: 'Content-Type', value: 'application/x.arweave-manifest+json' },
         { name: 'Device', value: 'manifest@1.0' },
       ],

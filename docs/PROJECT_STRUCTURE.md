@@ -1,11 +1,11 @@
 # Project Structure
 
-This document explains the organization of the permaweb-deploy codebase.
+This document explains the organization of the ario-deploy codebase.
 
 ## Directory Structure
 
 ```
-permaweb-deploy/
+ar-io-deploy/
 ├── .changeset/              # Changesets for version management
 │   ├── config.json          # Changesets configuration
 │   ├── README.md            # Changesets documentation
@@ -43,7 +43,6 @@ permaweb-deploy/
 ├── .prettierrc.json         # Prettier configuration
 ├── commitlint.config.js     # Commitlint configuration
 ├── CONTRIBUTING.md          # Contribution guidelines
-├── MIGRATION.md             # Migration guide
 ├── package.json             # Package manifest
 ├── pnpm-workspace.yaml      # pnpm workspace configuration
 ├── PROJECT_STRUCTURE.md     # This file

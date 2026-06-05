@@ -1,8 +1,6 @@
 import fs from 'node:fs'
 
-import { ARIO_MAINNET_PROCESS_ID, ARIO_TESTNET_PROCESS_ID } from '@ar.io/sdk'
-
-import { ARWEAVE_TX_ID_REGEX, TTL_MAX, TTL_MIN } from './constants.js'
+import { TTL_MAX, TTL_MIN } from './constants.js'
 import { expandPath } from './path.js'
 
 /**
@@ -33,22 +31,6 @@ export function validateUndername(value: string): string | true {
 }
 
 /**
- * Validate ARIO process ID
- */
-export function validateArioProcess(value: string): string | true {
-  // Allow shorthand values
-  if (value === 'mainnet' || value === 'testnet') {
-    return true
-  }
-
-  if (!ARWEAVE_TX_ID_REGEX.test(value)) {
-    return 'ARIO process must be a valid Arweave transaction ID, "mainnet", or "testnet"'
-  }
-
-  return true
-}
-
-/**
  * Validate file path exists
  */
 export function validateFileExists(value: string): string | true {
@@ -70,21 +52,6 @@ export function validateFolderExists(value: string): string | true {
   }
 
   return true
-}
-
-/**
- * Resolve ARIO process from shorthand to actual ID
- */
-export function resolveArioProcess(value: string): string {
-  if (value === 'mainnet') {
-    return ARIO_MAINNET_PROCESS_ID
-  }
-
-  if (value === 'testnet') {
-    return ARIO_TESTNET_PROCESS_ID
-  }
-
-  return value
 }
 
 /**

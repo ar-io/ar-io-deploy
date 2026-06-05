@@ -22,8 +22,8 @@ describe('formatUploadSize', () => {
 })
 
 describe('formatUploadCost', () => {
-  it('formats AO base units as decimal AO', () => {
-    expect(formatUploadCost({ amount: 1_347_788_856n, token: 'AO' })).toBe('0.001347788856 AO')
+  it('formats the cost amount as a base-unit string', () => {
+    expect(formatUploadCost({ amount: 1_347_788_856n, token: 'winc' })).toBe('1347788856')
   })
 })
 

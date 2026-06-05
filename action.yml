@@ -1,6 +1,6 @@
-name: 'Permaweb Deploy'
+name: 'ARIO Deploy'
 description: 'Deploy static sites to Arweave and update ArNS records. Perfect for PR previews and production deployments.'
-author: 'permaweb'
+author: 'Permanent Data Solutions, Inc.'
 branding:
   icon: 'upload-cloud'
   color: 'blue'
@@ -28,13 +28,16 @@ inputs:
     required: false
     default: '3600'
   sig-type:
-    description: 'Signer type for deployment (arweave, ethereum, polygon, kyve)'
+    description: 'Signer type for deployment (arweave, ethereum, polygon, kyve, solana). ArNS updates require solana.'
     required: false
     default: 'arweave'
-  ario-process:
-    description: 'ARIO process to use (mainnet, testnet, or a custom process ID)'
+  cluster:
+    description: 'Solana cluster for ArNS updates (mainnet or devnet)'
     required: false
     default: 'mainnet'
+  rpc-url:
+    description: 'Optional Solana RPC URL override for ArNS updates'
+    required: false
   on-demand:
     description: 'Enable on-demand payment with specified token (ario or base-eth)'
     required: false
@@ -42,33 +45,8 @@ inputs:
     description: 'Maximum token amount for on-demand payment (used with on-demand)'
     required: false
   uploader:
-    description: 'Bundler service base URL. For HyperBEAM, pass the node URL, for example https://hyperbeam.example.com.'
+    description: 'Custom Turbo upload service base URL (defaults to the ArDrive production endpoint).'
     required: false
-  uploader-type:
-    description: 'Uploader protocol to use: turbo or hyperbeam'
-    required: false
-    default: 'turbo'
-  hyperbeam-upload-path:
-    description: 'HyperBEAM bundler route used when uploader-type is hyperbeam'
-    required: false
-    default: '/~bundler@1.0/item?codec-device=ans104@1.0'
-  hyperbeam-auto-fund:
-    description: 'Automatically fund the HyperBEAM local ledger before upload'
-    required: false
-    default: 'false'
-  hyperbeam-fund-amount:
-    description: 'Optional minimum HyperBEAM local ledger balance override, in token base units'
-    required: false
-  hyperbeam-token-id:
-    description: 'Hyperbalance token ID to fund when the node advertises multiple tokens'
-    required: false
-  hyperbeam-ledger-id:
-    description: 'Hyperbalance ledger ID to fund when the node advertises multiple ledgers'
-    required: false
-  hyperbeam-ao-state-url:
-    description: 'AO state endpoint used while waiting for HyperBEAM auto-fund transfer assignment'
-    required: false
-    default: 'https://state.forward.computer'
   preview:
     description: 'Enable preview mode: auto-generates undername from PR number and posts a comment with the preview URL'
     required: false
@@ -81,7 +59,7 @@ inputs:
     description: 'GitHub token for posting PR comments (required when preview is enabled)'
     required: false
   no-dedupe:
-    description: 'Disable deduplication (do not cache or reuse previous uploads). By default, permaweb-deploy caches your deployment log to prevent uploading duplicate (unchanged) files.'
+    description: 'Disable deduplication (do not cache or reuse previous uploads). By default, ario-deploy caches your deployment log to prevent uploading duplicate (unchanged) files.'
     required: false
     default: 'false'
   dedupe-cache-max-entries:
@@ -107,17 +85,17 @@ runs:
       with:
         node-version: '20'
 
-    - name: Install permaweb-deploy
+    - name: Install ario-deploy
       shell: bash
-      run: npm install -g permaweb-deploy
+      run: npm install -g @ar.io/deploy
 
     - name: Restore transaction cache
       id: cache-restore
       if: inputs.no-dedupe != 'true'
       uses: actions/cache/restore@v4
       with:
-        path: .permaweb-deploy/transaction-cache.json
-        key: permaweb-deploy-transaction-cache
+        path: .ario-deploy/transaction-cache.json
+        key: ario-deploy-transaction-cache
 
     - name: Determine undername
       id: undername
@@ -185,7 +163,10 @@ runs:
         ARGS="$ARGS --undername ${{ steps.undername.outputs.undername }}"
         ARGS="$ARGS --ttl-seconds ${{ inputs.ttl-seconds }}"
         ARGS="$ARGS --sig-type ${{ inputs.sig-type }}"
-        ARGS="$ARGS --ario-process ${{ inputs.ario-process }}"
+        ARGS="$ARGS --cluster ${{ inputs.cluster }}"
+        if [[ -n "${{ inputs.rpc-url }}" ]]; then
+          ARGS="$ARGS --rpc-url ${{ inputs.rpc-url }}"
+        fi
 
         # Add deploy-folder or deploy-file
         if [[ -n "${{ inputs.deploy-file }}" ]]; then
@@ -203,27 +184,8 @@ runs:
         fi
 
         # Add uploader options
-        ARGS="$ARGS --uploader-type ${{ inputs.uploader-type }}"
         if [[ -n "${{ inputs.uploader }}" ]]; then
           ARGS="$ARGS --uploader ${{ inputs.uploader }}"
-        fi
-        if [[ "${{ inputs.uploader-type }}" == "hyperbeam" ]]; then
-          ARGS="$ARGS --hyperbeam-upload-path ${{ inputs.hyperbeam-upload-path }}"
-          if [[ "${{ inputs.hyperbeam-auto-fund }}" == "true" ]]; then
-            ARGS="$ARGS --hyperbeam-auto-fund"
-          fi
-          if [[ -n "${{ inputs.hyperbeam-fund-amount }}" ]]; then
-            ARGS="$ARGS --hyperbeam-fund-amount ${{ inputs.hyperbeam-fund-amount }}"
-          fi
-          if [[ -n "${{ inputs.hyperbeam-token-id }}" ]]; then
-            ARGS="$ARGS --hyperbeam-token-id ${{ inputs.hyperbeam-token-id }}"
-          fi
-          if [[ -n "${{ inputs.hyperbeam-ledger-id }}" ]]; then
-            ARGS="$ARGS --hyperbeam-ledger-id ${{ inputs.hyperbeam-ledger-id }}"
-          fi
-          if [[ -n "${{ inputs.hyperbeam-ao-state-url }}" ]]; then
-            ARGS="$ARGS --hyperbeam-ao-state-url ${{ inputs.hyperbeam-ao-state-url }}"
-          fi
         fi
 
         # Add dedupe options
@@ -233,10 +195,10 @@ runs:
           ARGS="$ARGS --dedupe-cache-max-entries ${{ inputs.dedupe-cache-max-entries }}"
         fi
 
-        echo "Running: permaweb-deploy deploy $ARGS"
+        echo "Running: ario-deploy deploy $ARGS"
 
         # Run deploy and capture output
-        OUTPUT=$(permaweb-deploy deploy $ARGS 2>&1) || {
+        OUTPUT=$(ario-deploy deploy $ARGS 2>&1) || {
           echo "Deployment failed"
           echo "$OUTPUT"
           exit 1
@@ -274,15 +236,15 @@ runs:
         GH_TOKEN: ${{ github.token }}
       run: |
         # Delete previous cache so we can save an updated one
-        gh cache delete permaweb-deploy-transaction-cache 2>/dev/null || true
+        gh cache delete ario-deploy-transaction-cache 2>/dev/null || true
 
     - name: Save transaction cache
       if: inputs.no-dedupe != 'true' && always()
       uses: actions/cache/save@v4
       continue-on-error: true
       with:
-        path: .permaweb-deploy/transaction-cache.json
-        key: permaweb-deploy-transaction-cache
+        path: .ario-deploy/transaction-cache.json
+        key: ario-deploy-transaction-cache
 
     - name: Comment on PR
       if: inputs.preview == 'true' && github.event_name == 'pull_request'
