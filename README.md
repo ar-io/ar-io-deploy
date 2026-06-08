@@ -7,9 +7,9 @@ Inspired by the [cookbook github action deployment guide](https://cookbook.arwea
 - **Turbo SDK Integration:** Uses Turbo SDK for fast, reliable file uploads to Arweave
 - **On-Demand Payment:** Pay with ARIO or Base-ETH tokens on-demand during upload
 - **Arweave Manifest v0.2.0:** Creates manifests with fallback support for SPAs
-- **Optional ArNS Updates:** Updates ArNS records via ANT with new transaction IDs and metadata
+- **Optional ArNS Updates:** Updates ArNS records via ANT with new transaction IDs
 - **Automated Workflow:** Integrates with GitHub Actions for continuous deployment
-- **Git Hash Tagging:** Automatically tags deployments with Git commit hashes
+- **Git Hash Tagging:** In CI (GitHub Actions), tags uploaded data items with the deploying commit SHA
 - **404 Fallback Detection:** Automatically detects and sets 404.html as fallback
 - **Network Support:** ArNS updates run against the Solana ARIO programs on `mainnet` or `devnet`, with an optional custom RPC URL
 - **Flexible Deployment:** Supports deploying a folder or a single file
@@ -266,7 +266,7 @@ By default, ario-deploy caches your deployment log to prevent uploading duplicat
 If you need to force a fresh upload of all files (e.g., for debugging or to ensure a completely new deployment):
 
 ```bash
-ario-deploy deploy --arns-name my-app --wallet ./wallet.json --no-dedupe
+ario-deploy deploy --wallet ./wallet.json --no-dedupe
 ```
 
 **Limit cache size:**
@@ -275,7 +275,7 @@ The dedupe cache uses an LRU (Least Recently Used) eviction strategy. By default
 
 ```bash
 # Keep only the last 1000 file entries
-ario-deploy deploy --arns-name my-app --wallet ./wallet.json --dedupe-cache-max-entries 1000
+ario-deploy deploy --wallet ./wallet.json --dedupe-cache-max-entries 1000
 ```
 
 **Cache location:**
@@ -449,7 +449,6 @@ By default, the action caches transaction IDs to avoid re-uploading unchanged fi
   uses: ar-io/ar-io-deploy@v1
   with:
     deploy-key: ${{ secrets.DEPLOY_KEY }}
-    arns-name: myapp
     deploy-folder: ./dist
     no-dedupe: 'true'
 ```
@@ -461,7 +460,6 @@ You can also limit the cache size:
   uses: ar-io/ar-io-deploy@v1
   with:
     deploy-key: ${{ secrets.DEPLOY_KEY }}
-    arns-name: myapp
     deploy-folder: ./dist
     dedupe-cache-max-entries: '1000'
 ```
@@ -533,7 +531,7 @@ jobs:
       - run: pnpm build
 
       - name: Deploy with ARIO on-demand
-        run: ario-deploy deploy --arns-name my-app --on-demand ario --max-token-amount 2.0
+        run: ario-deploy deploy --arns-name my-app --sig-type solana --on-demand ario --max-token-amount 2.0
         env:
           DEPLOY_KEY: ${{ secrets.DEPLOY_KEY }}
 
@@ -661,11 +659,11 @@ Follow the prompts to describe your changes.
 
 ## License
 
-ISC
+MIT
 
 ## Author
 
-NickJ202
+Permanent Data Solutions, Inc.
 
 ## Links
 
