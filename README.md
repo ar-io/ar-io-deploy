@@ -2,10 +2,28 @@
 
 `ario-deploy` is a Node.js command-line tool designed to streamline the deployment of web applications to the permaweb using Arweave. It uploads your build folder or a single file, creates Arweave manifests, and can optionally update ArNS (Ar.io Name System) records via ANT (Ar.io Name Token) with the transaction ID.
 
+## Quick Start
+
+Deploy your app to Arweave in under a minute:
+
+```bash
+# Install
+npm install -g @ar.io/deploy
+
+# Deploy (interactive — prompts for everything)
+ario-deploy deploy
+
+# Or one-liner with a Solana wallet + ArNS name
+DEPLOY_KEY=<solana-base58-key> ario-deploy deploy --deploy-folder ./dist --arns-name myapp --sig-type solana
+```
+
+Your app is now permanently live at `https://myapp.ar.io`.
+
 ## Table of Contents
 
 <!-- toc -->
 
+- [Quick Start](#quick-start)
 - [Table of Contents](#table-of-contents)
 - [Features](#features)
 - [Installation](#installation)
@@ -18,6 +36,7 @@
 - [Package.json Scripts](#packagejson-scripts)
 - [GitHub Action](#github-action)
 - [CLI in GitHub Actions](#cli-in-github-actions)
+- [Claude Code Integration](#claude-code-integration)
 - [Development](#development)
 - [Security & Best Practices](#security--best-practices)
 - [Troubleshooting](#troubleshooting)
@@ -571,6 +590,37 @@ jobs:
       #   env:
       #     DEPLOY_KEY: ${{ secrets.ETH_PRIVATE_KEY }}
 ```
+
+## Claude Code Integration
+
+Use [Claude Code](https://claude.ai/code) to deploy your app with natural language. Just say "deploy to ar.io" and Claude handles the rest.
+
+### Add the Skill to Your Project
+
+```bash
+mkdir -p .claude/skills
+curl -o .claude/skills/deploy.md https://raw.githubusercontent.com/ar-io/ar-io-deploy/main/examples/claude-skill/deploy.md
+```
+
+Then in Claude Code, say:
+
+- "deploy to ar.io"
+- "deploy my app to arweave"
+- "set up CI/CD for ar.io deployment"
+
+Claude will build your project, detect the output folder, and run the deploy with the right flags.
+
+### What the Skill Does
+
+1. **Detects your build folder** (`./dist`, `./build`, `./out`)
+2. **Checks for credentials** (`DEPLOY_KEY` env var or wallet file)
+3. **Installs `@ar.io/deploy`** if not already available
+4. **Runs the deployment** with appropriate flags
+5. **Reports results** — transaction ID, Arweave URL, ArNS URL
+
+See [`examples/claude-skill/`](./examples/claude-skill/) for the full skill file and customization options.
+
+---
 
 ## Development
 
