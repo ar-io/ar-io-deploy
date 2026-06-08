@@ -6,6 +6,51 @@ Deploy this project to the permaweb (Arweave) with optional ArNS name updates.
 
 Use when the user says: "deploy", "deploy to ar.io", "deploy to arweave", "publish to permaweb", "/deploy", or asks to ship/publish the app.
 
+## First-Time Setup
+
+If the user hasn't deployed to AR.IO before, guide them through setup:
+
+### Create a Wallet
+
+**For ArNS deployments (recommended)** — use a Solana wallet:
+
+```bash
+# Install Solana CLI
+sh -c "$(curl -sSfL https://release.anza.xyz/stable/install)"
+
+# Generate a keypair
+solana-keygen new
+
+# Get your base58 private key for DEPLOY_KEY
+solana-keygen export-private-key
+```
+
+**For upload-only** — an Arweave wallet works:
+
+- Generate at https://arweave.app
+- Base64-encode the JWK: `base64 -i wallet.json`
+
+### Get an ArNS Name (optional, for human-readable URLs)
+
+- Purchase a name at https://arns.app (costs ARIO tokens)
+- This gives you a permanent URL like `https://myapp.ar.io`
+- Skip if you only need a raw Arweave transaction URL
+
+### Fund Uploads
+
+- **Pre-fund**: Buy Turbo credits at https://turbo.ardrive.io
+- **On-demand**: Use `--on-demand ario` to auto-convert ARIO tokens during deploy
+
+### Set DEPLOY_KEY
+
+| Signer   | DEPLOY_KEY Format                                       |
+| -------- | ------------------------------------------------------- |
+| solana   | Base58 private key (`solana-keygen export-private-key`) |
+| arweave  | `base64 -i wallet.json`                                 |
+| ethereum | Hex private key (`0xabc...`)                            |
+
+Or use `--wallet <path>` to point to a key file instead.
+
 ## How to Use
 
 This skill uses `@ar.io/deploy` to upload your built app to Arweave permanently.
