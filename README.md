@@ -1,6 +1,6 @@
 # ARIO Deploy
 
-Inspired by the [cookbook github action deployment guide](https://cookbook.arweave.dev/guides/deployment/github-action.html), `ario-deploy` is a Node.js command-line tool designed to streamline the deployment of web applications to the permaweb using Arweave. It uploads your build folder or a single file, creates Arweave manifests, and can optionally update ArNS (Arweave Name Service) records via ANT (Arweave Name Token) with the transaction ID.
+`ario-deploy` is a Node.js command-line tool designed to streamline the deployment of web applications to the permaweb using Arweave. It uploads your build folder or a single file, creates Arweave manifests, and can optionally update ArNS (Ar.io Name System) records via ANT (Ar.io Name Token) with the transaction ID.
 
 ## Table of Contents
 
@@ -234,7 +234,7 @@ Uploads go through a bundler service that accepts signed data items and posts th
 | When to use               | Example value                                           |
 | ------------------------- | ------------------------------------------------------- |
 | **Default** (omit flag)   | ArDrive production bundler — same as Turbo CLI defaults |
-| **Arweave bundler**       | `https://up.arweave.net`                                |
+| **Arweave bundler**       | `https://turbo.ardrive.io`                              |
 | **Development / staging** | `https://upload.ardrive.dev`                            |
 | **Custom or self-hosted** | Your own base URL if it implements the Turbo API        |
 
@@ -242,15 +242,15 @@ Uploads go through a bundler service that accepts signed data items and posts th
 
 ```bash
 # Deploy using Arweave’s bundler service
-ario-deploy deploy --wallet ./wallet.json --deploy-folder ./dist --uploader https://up.arweave.net
+ario-deploy deploy --wallet ./wallet.json --deploy-folder ./dist --uploader https://turbo.ardrive.io
 
-ario-deploy upload --wallet ./wallet.json --deploy-folder ./dist --uploader https://up.arweave.net
+ario-deploy upload --wallet ./wallet.json --deploy-folder ./dist --uploader https://turbo.ardrive.io
 ```
 
 **Notes:**
 
 - Turbo billing and signer behavior follow Turbo.
-- Use a **base URL only** (e.g. `https://up.arweave.net`), not a path to a specific file or route.
+- Use a **base URL only** (e.g. `https://turbo.ardrive.io`), not a path to a specific file or route.
 
 ## Command Options
 

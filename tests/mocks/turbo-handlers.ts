@@ -51,9 +51,9 @@ export const mockTurboData = {
   uploadFolderResponse: (manifestId = 'J4C3y8Y8Y8Y8Y8Y8Y8Y8Y8Y8Y8Y8Y8Y8Y8Y8Y8Y8Y8') => ({
     fileResponses: [
       {
-        dataCaches: ['https://arweave.net'],
+        dataCaches: ['https://turbo-gateway.com'],
         deadlineHeight: 1_000_000,
-        fastFinalityIndexes: ['https://arweave.net'],
+        fastFinalityIndexes: ['https://turbo-gateway.com'],
         id: 'mock-file-id-1',
         owner: 'mock-owner-address',
         public: 'mock-public-key',
@@ -63,9 +63,9 @@ export const mockTurboData = {
         winc: '50000000',
       },
       {
-        dataCaches: ['https://arweave.net'],
+        dataCaches: ['https://turbo-gateway.com'],
         deadlineHeight: 1_000_000,
-        fastFinalityIndexes: ['https://arweave.net'],
+        fastFinalityIndexes: ['https://turbo-gateway.com'],
         id: 'mock-file-id-2',
         owner: 'mock-owner-address',
         public: 'mock-public-key',
@@ -87,9 +87,9 @@ export const mockTurboData = {
       version: '0.2.0',
     },
     manifestResponse: {
-      dataCaches: ['https://arweave.net'],
+      dataCaches: ['https://turbo-gateway.com'],
       deadlineHeight: 1_000_000,
-      fastFinalityIndexes: ['https://arweave.net'],
+      fastFinalityIndexes: ['https://turbo-gateway.com'],
       id: manifestId,
       owner: 'mock-owner-address',
       public: 'mock-public-key',
@@ -102,9 +102,9 @@ export const mockTurboData = {
 
   // Upload Service response (DataItemPost)
   uploadResponse: (id = 'NkeBzc8ObeLGw_L9AO-ivBN8H-ZUKOhOvmDKdBRxVUw'): DataItemPost => ({
-    dataCaches: ['https://arweave.net'],
+    dataCaches: ['https://turbo-gateway.com'],
     deadlineHeight: 1_000_000,
-    fastFinalityIndexes: ['https://arweave.net'],
+    fastFinalityIndexes: ['https://turbo-gateway.com'],
     id,
     owner: 'mock-owner-address',
     public: 'mock-public-key',
@@ -127,7 +127,7 @@ export const turboUploadHandlers = [
         ethereum: '0x8wgRDgvYOrtSaWEIV21g0lTuWDUnTu4_iYj4hmA7PI0',
         solana: '8wgRDgvYOrtSaWEIV21g0lTuWDUnTu4_iYj4hmA7PI0',
       },
-      gateway: 'https://arweave.net',
+      gateway: 'https://turbo-gateway.com',
       version: '0.1.0',
     }),
   ),
@@ -453,7 +453,7 @@ export const aoHandlers = [
   ),
 
   // AR.IO GraphQL endpoint for contract state
-  http.post('https://arweave.net/graphql', async () =>
+  http.post('https://turbo-gateway.com/graphql', async () =>
     HttpResponse.json({
       data: {
         transactions: {

@@ -2,6 +2,20 @@
 
 This directory contains the test suite for `ar-io-deploy`.
 
+<!-- toc -->
+
+- [Test Structure](#test-structure)
+- [Running Tests](#running-tests)
+- [Verbose Logging](#verbose-logging)
+- [Type Generation](#type-generation)
+- [Mock Service Worker (MSW)](#mock-service-worker-msw)
+- [Writing Tests](#writing-tests)
+- [Test Constants](#test-constants)
+- [Debugging](#debugging)
+- [CI/CD](#cicd)
+
+<!-- tocstop -->
+
 ## Test Structure
 
 ```
@@ -108,7 +122,7 @@ The MSW server intercepts requests to:
    - Compute Unit (`cu.ardrive.io`) - Message execution and results
    - Message Unit (`mu.ao-testnet.xyz`) - Data item uploads
 
-4. **Arweave** (`arweave.net/graphql`)
+4. **Arweave** (`turbo-gateway.com/graphql`)
    - Contract state queries
    - Transaction lookups
 

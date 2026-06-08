@@ -16,7 +16,7 @@ const VERBOSE_LOGGING = process.env.MSW_VERBOSE === 'true'
  * - Turbo Payment Service (payment.ardrive.io)
  * - AO Compute Unit (cu.ardrive.io)
  * - AO Message Unit (mu.ao-testnet.xyz)
- * - Arweave GraphQL (arweave.net/graphql)
+ * - Arweave GraphQL (turbo-gateway.com/graphql)
  */
 export const server = setupServer(...turboHandlers)
 

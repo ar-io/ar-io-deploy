@@ -10,10 +10,10 @@ inputs:
     description: 'Arweave JWK wallet (base64-encoded or JSON string) for Arweave signer, or raw private key for Ethereum/Polygon/KYVE signers'
     required: true
   arns-name:
-    description: 'The ArNS name to update (e.g., "myapp" for myapp.arweave.net)'
+    description: 'The ArNS name to update (e.g., "myapp" for myapp.turbo-gateway.com)'
     required: true
   undername:
-    description: 'The undername to use. Use "@" for base name, or a custom value for undernames (e.g., "docs" for docs_myapp.arweave.net)'
+    description: 'The undername to use. Use "@" for base name, or a custom value for undernames (e.g., "docs" for docs_myapp.turbo-gateway.com)'
     required: false
     default: '@'
   deploy-folder:

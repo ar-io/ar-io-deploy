@@ -181,4 +181,4 @@ pnpm build && ario-deploy deploy --arns-name my-app --sig-type solana --deploy-f
 
 - [Open an issue](https://github.com/ar-io/ar-io-deploy/issues)
 - [Read the docs](https://docs.ar.io/)
-- [Join the community](https://discord.gg/arweave)
+- [Join the community](https://discord.gg/csYueXqZ3W)

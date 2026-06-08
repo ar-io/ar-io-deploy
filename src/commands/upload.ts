@@ -27,7 +27,7 @@ export default class Upload extends Command {
     '<%= config.bin %> upload --wallet ./wallet.json --deploy-folder ./dist',
     '<%= config.bin %> upload --wallet ./wallet.json --deploy-file ./dist/index.html',
     '<%= config.bin %> upload --private-key "$(cat wallet.json)" --on-demand ario --max-token-amount 1.5',
-    '<%= config.bin %> upload --wallet ./wallet.json --uploader https://up.arweave.net',
+    '<%= config.bin %> upload --wallet ./wallet.json --uploader https://turbo.ardrive.io',
     '<%= config.bin %> upload --wallet ./id.json --sig-type solana',
   ]
 
@@ -126,7 +126,7 @@ export default class Upload extends Command {
           rows.push(['Bundler service', chalk.cyan(uploadCfg.uploader)])
         }
 
-        rows.push(['Arweave URL', chalk.yellow(`https://arweave.net/${txOrManifestId}`)])
+        rows.push(['Arweave URL', chalk.yellow(`https://turbo-gateway.com/${txOrManifestId}`)])
 
         this.log(chalk.bold(chalk.green('Upload successful!')))
         this.log(formatDisplayRows(rows))

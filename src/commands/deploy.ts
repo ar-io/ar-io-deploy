@@ -153,7 +153,7 @@ export default class Deploy extends Command {
             rows.push(['Bundler service', chalk.cyan(deployConfig.uploader)])
           }
 
-          rows.push(['Arweave URL', chalk.yellow(`https://arweave.net/${txOrManifestId}`)])
+          rows.push(['Arweave URL', chalk.yellow(`https://turbo-gateway.com/${txOrManifestId}`)])
 
           this.log(chalk.bold(chalk.green('Deployment Successful!')))
           this.log(formatDisplayRows(rows))
@@ -224,7 +224,7 @@ export default class Deploy extends Command {
           ['ANT', chalk.cyan(arnsNameRecord.processId)],
           ['Cluster', chalk.gray(cluster)],
           ['TTL Seconds', chalk.blue(deployConfig['ttl-seconds'])],
-          ['Arweave URL', chalk.yellow(`https://arweave.net/${txOrManifestId}`)],
+          ['Arweave URL', chalk.yellow(`https://turbo-gateway.com/${txOrManifestId}`)],
         )
 
         this.log(chalk.bold(chalk.green('Deployment Successful!')))

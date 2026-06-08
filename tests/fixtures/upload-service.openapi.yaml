@@ -2,7 +2,7 @@ openapi: 3.1.1
 info:
   title: Turbo Upload Service
   version: 0.1.0
-  description: The Turbo Upload Service supports posting signed data-items to Arweave.net using Turbo Credits.
+  description: The Turbo Upload Service supports posting signed data-items to turbo-gateway.com using Turbo Credits.
 
 servers:
   - url: https://upload.ardrive.io/v1
@@ -27,14 +27,14 @@ components:
           items:
             type: string
           example:
-            - arweave.net
+            - turbo-gateway.com
         fastFinalityIndexes:
           type: array
           description: The Arweave fast finality indexes the data item has been posted to.
           items:
             type: string
           example:
-            - arweave.net
+            - turbo-gateway.com
         deadlineHeight:
           type: integer
           description: The deadline block height for the data item to be posted to Arweave.

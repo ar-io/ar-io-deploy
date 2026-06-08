@@ -32,9 +32,9 @@ describe('formatDisplayRows', () => {
     expect(
       formatDisplayRows([
         ['Tx ID', 'abc123'],
-        ['Arweave URL', 'https://arweave.net/abc123'],
+        ['Arweave URL', 'https://turbo-gateway.com/abc123'],
       ]),
-    ).toBe('Tx ID: abc123\nArweave URL: https://arweave.net/abc123')
+    ).toBe('Tx ID: abc123\nArweave URL: https://turbo-gateway.com/abc123')
   })
 })
 

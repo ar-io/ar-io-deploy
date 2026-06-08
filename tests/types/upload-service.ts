@@ -126,14 +126,14 @@ export interface components {
             /**
              * @description The Arweave data caches the data item has been posted to.
              * @example [
-             *       "arweave.net"
+             *       "turbo-gateway.com"
              *     ]
              */
             dataCaches?: string[];
             /**
              * @description The Arweave fast finality indexes the data item has been posted to.
              * @example [
-             *       "arweave.net"
+             *       "turbo-gateway.com"
              *     ]
              */
             fastFinalityIndexes?: string[];
