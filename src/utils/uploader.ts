@@ -15,6 +15,22 @@ import {
 } from './cache.js'
 import type { UploadClient, UploadCost, UploadSize } from './upload-types.js'
 
+type DataItemTag = { name: string; value: string }
+
+/**
+ * Provenance tags stamped on every uploaded data item. In CI (GitHub Actions)
+ * the deploying commit SHA is attached as a GIT-HASH tag; locally, where
+ * GITHUB_SHA is unset, it is omitted.
+ */
+export function provenanceTags(): DataItemTag[] {
+  const tags: DataItemTag[] = [{ name: 'App-Name', value: 'ARIO-Deploy' }]
+  if (process.env.GITHUB_SHA) {
+    tags.push({ name: 'GIT-HASH', value: process.env.GITHUB_SHA })
+  }
+
+  return tags
+}
+
 export interface UploadResult {
   cacheHit: boolean
   cost?: UploadCost
@@ -62,10 +78,7 @@ export async function uploadFile(
   const uploadResult = await turbo.uploadFile({
     dataItemOpts: {
       tags: [
-        {
-          name: 'App-Name',
-          value: 'ARIO-Deploy',
-        },
+        ...provenanceTags(),
         {
           name: 'anchor',
           value: new Date().toISOString(),
@@ -182,10 +195,7 @@ export async function uploadFolder(
 
         const uploadResult = await turbo.uploadFile({
           dataItemOpts: {
-            tags: [
-              { name: 'App-Name', value: 'ARIO-Deploy' },
-              { name: 'Content-Type', value: mimeType },
-            ],
+            tags: [...provenanceTags(), { name: 'Content-Type', value: mimeType }],
           },
           file: task.fullPath,
           ...(options?.fundingMode && { fundingMode: options.fundingMode }),
@@ -259,7 +269,7 @@ export async function uploadFolder(
   const manifestUploadResult = await turbo.uploadFile({
     dataItemOpts: {
       tags: [
-        { name: 'App-Name', value: 'ARIO-Deploy' },
+        ...provenanceTags(),
         { name: 'Content-Type', value: 'application/x.arweave-manifest+json' },
         { name: 'Device', value: 'manifest@1.0' },
       ],
