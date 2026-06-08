@@ -82,37 +82,25 @@ yarn add --dev @ar.io/deploy
 
 ### Interactive Mode (Easiest)
 
-**Command Menu:**
-
-Simply run the CLI for an interactive command selector:
-
-```bash
-ario-deploy
-# or explicitly
-ario-deploy interactive
-```
-
-This shows a menu with options:
-
-- **Deploy to Permaweb** - Start the deployment wizard
-- **Show Help** - Display help information
-- **Exit** - Exit the CLI
-
-**Interactive Deploy (Guided):**
-
 Run the deploy command without arguments to be guided through all deployment options:
 
 ```bash
 ario-deploy deploy
 ```
 
-This uploads to the permaweb by default. Use `--use-arns` or `--arns-name` to run the guided ArNS update flow, which will prompt you for:
+When ArNS details aren't supplied via flags, `deploy` asks whether you want to
+update an ArNS name (defaulting to yes) and, if so, prompts for the details. It
+will guide you through:
 
-- ArNS name
+- Whether to update an ArNS name (and which one)
 - Wallet method (file, string, or environment variable)
-- Signer type (Arweave, Ethereum, Polygon, KYVE, Solana)
 - What to deploy (folder or file)
 - Advanced options (optional: undername, TTL, Solana cluster)
+
+Pass `--arns-name` (or `--use-arns`) to skip the ArNS confirmation, or use the
+`upload` command for an upload-only run. In a non-interactive environment (CI,
+or no TTY) `deploy` does not prompt — supply everything via flags or
+`DEPLOY_KEY`.
 
 ### Direct Commands
 

@@ -5,7 +5,7 @@ import { Command } from '@oclif/core'
 import ora from 'ora'
 
 import { type DeployConfig, deployFlagConfigs } from '../constants/flags.js'
-import { promptAdvancedOptions } from '../prompts/arns.js'
+import { promptAdvancedOptions, promptUpdateArns } from '../prompts/arns.js'
 import { getWalletConfig } from '../prompts/wallet.js'
 import { chalk } from '../utils/chalk.js'
 import { extractFlags, resolveConfig } from '../utils/config-resolver.js'
@@ -38,13 +38,41 @@ export default class Deploy extends Command {
 
   public async run(): Promise<void> {
     try {
-      const { flags } = await this.parse(Deploy)
+      const { flags, metadata } = await this.parse(Deploy)
 
-      const useArns = Boolean(flags['use-arns'] || flags['arns-name'])
-      const interactive = useArns && !flags['arns-name']
+      const hasArnsName = Boolean(flags['arns-name'])
+      const explicitUseArns = Boolean(flags['use-arns'])
+      const canPrompt = Boolean(process.stdout.isTTY) && !process.env.CI
+
+      // Decide whether to update ArNS and whether to run interactive prompts.
+      // When no ArNS details are supplied we ask by default (in a TTY); the
+      // resolveConfig pass below then prompts for the name and other missing
+      // values. A non-interactive environment falls back to upload-only.
+      let useArns = hasArnsName || explicitUseArns
+      let interactive = false
+
+      if (hasArnsName) {
+        interactive = false
+      } else if (explicitUseArns) {
+        interactive = canPrompt
+      } else if (canPrompt) {
+        useArns = await promptUpdateArns()
+        interactive = useArns
+      }
+
+      // ArNS requires a Solana signer. In the guided flow (where we also prompt
+      // for the wallet), default the signer type to solana when the user didn't
+      // choose one, so it doesn't fall through to the arweave default and trip
+      // the guard below. In non-interactive runs we leave the flag as given so
+      // the guard can surface the clear "requires --sig-type solana" error.
+      const sigTypeFromDefault = metadata.flags['sig-type']?.setFromDefault ?? false
+      if (useArns && interactive && sigTypeFromDefault) {
+        flags['sig-type'] = 'solana'
+      }
 
       if (interactive) {
         this.log(chalk.bold(chalk.cyan('\nInteractive ArNS Deployment Mode\n')))
+        this.log(chalk.dim('ArNS updates are signed with a Solana wallet.\n'))
       }
 
       const baseConfig = (await resolveConfig<typeof deployFlagConfigs>(deployFlagConfigs, flags, {

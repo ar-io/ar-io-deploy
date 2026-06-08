@@ -37,7 +37,6 @@
     "dirname": "ario-deploy",
     "commands": "./dist/commands",
     "topicSeparator": " ",
-    "default": "interactive",
     "topics": {
       "deploy": {
         "description": "Deploy to the permaweb"

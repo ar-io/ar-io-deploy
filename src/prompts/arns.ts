@@ -10,6 +10,13 @@ export interface AdvancedOptions {
   undername: string
 }
 
+export async function promptUpdateArns(): Promise<boolean> {
+  return confirm({
+    default: true,
+    message: 'Update an ArNS name after upload?',
+  })
+}
+
 export async function promptArnsName(): Promise<string> {
   return input({
     message: 'Enter your ArNS name:',
