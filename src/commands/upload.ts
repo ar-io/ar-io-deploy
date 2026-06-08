@@ -53,7 +53,11 @@ export default class Upload extends Command {
       }
 
       if (interactive && !baseConfig.wallet && !baseConfig['private-key']) {
-        const config = await getWalletConfig()
+        const config = await getWalletConfig({
+          envVar: 'DEPLOY_KEY',
+          label: 'upload key',
+          purpose: 'pays for the upload',
+        })
         walletConfig = {
           privateKey: config.privateKey,
           wallet: config.wallet,

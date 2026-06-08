@@ -105,7 +105,7 @@ describe(
     })
 
     describe('arns', () => {
-      it('should require --sig-type solana when updating ArNS', async () => {
+      it('should require a separate ArNS authority key when updating ArNS', async () => {
         const result = await runCommand([
           'deploy',
           '--deploy-folder',
@@ -118,7 +118,7 @@ describe(
         ])
 
         expect(result.error).toBeDefined()
-        expect(result.error?.message).toMatch(/ArNS updates require --sig-type solana/)
+        expect(result.error?.message).toMatch(/No ArNS authority key provided/)
       })
 
       // TODO: ArNS now resolves records and writes the ANT update through the

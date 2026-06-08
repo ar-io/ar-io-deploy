@@ -64,19 +64,29 @@ yarn add --dev @ar.io/deploy
 
 ## Prerequisites
 
-1. **For Arweave signer (default):** Encode your Arweave wallet key in base64 format and set it as a GitHub secret:
+A deployment uses up to **two independent keys**:
+
+- **Upload key** — pays for the upload. Any supported chain (`--wallet` / `--private-key`, or the `DEPLOY_KEY` env var; chain selected with `--sig-type`).
+- **ArNS authority key** — only needed when updating ArNS. Always a **Solana** key that controls the ArNS name and signs the ANT record update (`--arns-wallet` / `--arns-private-key`, or the `ARNS_KEY` env var).
+
+They can be the same Solana wallet or two different wallets — provide each explicitly.
+
+### Upload key (`DEPLOY_KEY`)
+
+1. **Arweave signer (default):** Encode your Arweave wallet key in base64 and set it as `DEPLOY_KEY`:
 
    ```bash
    base64 -i wallet.json | pbcopy
    ```
 
-2. **For Ethereum/Polygon/KYVE signers:** Use your raw private key (no encoding needed) as the `DEPLOY_KEY`.
-3. **For Solana signers:** Use a base58-encoded secret key (the "export private key" format) as the `DEPLOY_KEY`, or a `solana-keygen` `id.json` byte-array wallet file via `--wallet`.
-4. Ensure that the secret name for the encoded wallet or private key is `DEPLOY_KEY`.
+2. **Ethereum/Polygon/KYVE signers:** Use your raw private key (no encoding needed) as `DEPLOY_KEY`.
+3. **Solana signer:** Use a base58-encoded secret key as `DEPLOY_KEY`, or a `solana-keygen` `id.json` byte-array wallet file via `--wallet`.
 
-⚠️ **Important:** Use a dedicated wallet for deployments to minimize security risks. Ensure your wallet has sufficient Turbo Credits for uploads.
+### ArNS authority key (`ARNS_KEY`)
 
-> **ArNS updates require a Solana signer.** ArNS/ANT records now live on Solana programs, so any deployment that updates ArNS (`--use-arns` / `--arns-name`) must use `--sig-type solana`. Uploads alone can use any supported signer.
+Set a base58-encoded **Solana** secret key as `ARNS_KEY`, or pass a `solana-keygen` `id.json` file via `--arns-wallet` (or a base58 string via `--arns-private-key`). This key must control the ArNS name being updated.
+
+⚠️ **Important:** Use dedicated wallets for deployments to minimize security risks. Ensure your upload wallet has sufficient Turbo Credits for uploads.
 
 ## Commands
 
@@ -110,8 +120,8 @@ Use flags for faster, scriptable deployments:
 # Basic deployment with wallet file
 ario-deploy deploy --wallet ./wallet.json
 
-# Deployment with ArNS update (ArNS requires a Solana signer)
-ario-deploy deploy --use-arns --arns-name my-app --sig-type solana --wallet ./id.json
+# Deployment with ArNS update (separate upload key + Solana ArNS authority key)
+ario-deploy deploy --use-arns --arns-name my-app --wallet ./wallet.json --arns-wallet ./arns-id.json
 ```
 
 Deploy using private key directly:
@@ -151,23 +161,23 @@ DEPLOY_KEY=$(base64 -i wallet.json) ario-deploy upload --deploy-folder ./dist
 
 ### Advanced Usage
 
-Deploy to an undername (subdomain) — ArNS, so a Solana signer is required:
+Deploy to an undername (subdomain) — the ArNS authority key is a Solana wallet:
 
 ```bash
-ario-deploy deploy --use-arns --arns-name my-app --sig-type solana --wallet ./id.json --undername staging
+ario-deploy deploy --use-arns --arns-name my-app --wallet ./wallet.json --arns-wallet ./arns-id.json --undername staging
 ```
 
 Deploy with a custom TTL:
 
 ```bash
-ario-deploy deploy --use-arns --arns-name my-app --sig-type solana --wallet ./id.json --ttl-seconds 7200
+ario-deploy deploy --use-arns --arns-name my-app --wallet ./wallet.json --arns-wallet ./arns-id.json --ttl-seconds 7200
 ```
 
 Update ArNS on devnet (or against a custom RPC):
 
 ```bash
-ario-deploy deploy --use-arns --arns-name my-app --sig-type solana --wallet ./id.json --cluster devnet
-ario-deploy deploy --use-arns --arns-name my-app --sig-type solana --wallet ./id.json --rpc-url https://my-rpc.example.com
+ario-deploy deploy --use-arns --arns-name my-app --wallet ./wallet.json --arns-wallet ./arns-id.json --cluster devnet
+ario-deploy deploy --use-arns --arns-name my-app --wallet ./wallet.json --arns-wallet ./arns-id.json --rpc-url https://my-rpc.example.com
 ```
 
 Upload using an Ethereum wallet (file):
@@ -244,17 +254,25 @@ ario-deploy upload --wallet ./wallet.json --deploy-folder ./dist --uploader http
 
 **`deploy`** (upload by default, optional ArNS update):
 
-- `--use-arns`: Update an ArNS/ANT record after upload. **Requires `--sig-type solana`.**
-- `--arns-name, -n`: The ArNS name to update. Required when using `--use-arns`; also implies ArNS mode for backwards compatibility.
+- `--use-arns`: Update an ArNS/ANT record after upload. When ArNS details aren't supplied and you're in a TTY, `deploy` asks by default.
+- `--arns-name, -n`: The ArNS name to update. Required when using `--use-arns`; also implies ArNS mode.
 - `--cluster, -p`: Solana cluster for ArNS updates. Choices: `mainnet`, `devnet`. Default: `mainnet`
 - `--rpc-url`: Optional Solana RPC URL override for ArNS updates
 - `--deploy-folder, -d`: Folder to deploy. Default: `./dist`
 - `--deploy-file, -f`: Deploy a single file instead of a folder
 - `--undername, -u`: ANT undername to update. Default: `@`
 - `--ttl-seconds, -t`: TTL in seconds for the ANT record (60-86400). Default: `60`
-- `--sig-type, -s`: Signer type for deployment. Choices: `arweave`, `ethereum`, `polygon`, `kyve`, `solana`. Default: `arweave`
-- `--wallet, -w`: Path to wallet file (JWK for Arweave, private key for Ethereum/Polygon/KYVE, `solana-keygen` `id.json` for Solana)
-- `--private-key, -k`: Private key string (alternative to `--wallet`). JWK JSON for Arweave, hex for EVM chains, base58 secret key for Solana
+
+Upload key (pays for the upload):
+
+- `--sig-type, -s`: Signer type for the upload key. Choices: `arweave`, `ethereum`, `polygon`, `kyve`, `solana`. Default: `arweave`
+- `--wallet, -w`: Path to the upload wallet file (JWK for Arweave, private key for Ethereum/Polygon/KYVE, `solana-keygen` `id.json` for Solana). Falls back to `DEPLOY_KEY`.
+- `--private-key, -k`: Upload private-key string (alternative to `--wallet`). JWK JSON for Arweave, hex for EVM chains, base58 secret key for Solana.
+
+ArNS authority key (controls the name, signs the update — always Solana):
+
+- `--arns-wallet`: Path to the Solana `solana-keygen` `id.json` wallet that controls the ArNS name. Falls back to `ARNS_KEY`.
+- `--arns-private-key`: Base58 Solana secret key for the ArNS authority (alternative to `--arns-wallet`). Falls back to `ARNS_KEY`.
 - `--on-demand`: Enable on-demand payment with specified token. Choices: `ario`, `base-eth`
 - `--max-token-amount`: Maximum token amount for on-demand payment (used with `--on-demand`)
 - `--no-dedupe`: Disable deduplication (do not cache or reuse previous uploads)
@@ -308,24 +326,24 @@ Add deployment scripts to your `package.json`:
 {
   "scripts": {
     "build": "vite build",
-    "deploy": "pnpm build && ario-deploy deploy --arns-name <ARNS_NAME> --sig-type solana",
-    "deploy:staging": "pnpm build && ario-deploy deploy --arns-name <ARNS_NAME> --sig-type solana --undername staging",
-    "deploy:devnet": "pnpm build && ario-deploy deploy --arns-name <ARNS_NAME> --sig-type solana --cluster devnet",
-    "deploy:on-demand": "pnpm build && ario-deploy deploy --arns-name <ARNS_NAME> --sig-type solana --on-demand ario --max-token-amount 1.5"
+    "deploy": "pnpm build && ario-deploy deploy --arns-name <ARNS_NAME>",
+    "deploy:staging": "pnpm build && ario-deploy deploy --arns-name <ARNS_NAME> --undername staging",
+    "deploy:devnet": "pnpm build && ario-deploy deploy --arns-name <ARNS_NAME> --cluster devnet",
+    "deploy:on-demand": "pnpm build && ario-deploy deploy --arns-name <ARNS_NAME> --on-demand ario --max-token-amount 1.5"
   }
 }
 ```
 
-Then deploy with:
+These read the upload key from `DEPLOY_KEY` and the Solana ArNS authority key from `ARNS_KEY`. Deploy with:
 
 ```bash
-DEPLOY_KEY=$(base64 -i wallet.json) pnpm deploy
+DEPLOY_KEY=$(base64 -i wallet.json) ARNS_KEY=<base58-solana-secret-key> pnpm deploy
 ```
 
 Or with on-demand payment:
 
 ```bash
-DEPLOY_KEY=$(base64 -i wallet.json) pnpm deploy:on-demand
+DEPLOY_KEY=$(base64 -i wallet.json) ARNS_KEY=<base58-solana-secret-key> pnpm deploy:on-demand
 ```
 
 ## GitHub Action
@@ -337,10 +355,10 @@ The easiest way to integrate ario-deploy into your CI/CD pipeline is using our o
 ```yaml
 - uses: ar-io/ar-io-deploy@v1
   with:
-    deploy-key: ${{ secrets.DEPLOY_KEY }}
+    deploy-key: ${{ secrets.DEPLOY_KEY }} # upload key (pays for the upload)
+    arns-key: ${{ secrets.ARNS_KEY }} # Solana ArNS authority key
     arns-name: myapp
     deploy-folder: ./dist
-    sig-type: solana # ArNS updates require a Solana signer
 ```
 
 ### PR Preview Deployments
@@ -375,8 +393,8 @@ jobs:
         uses: ar-io/ar-io-deploy@v1
         with:
           deploy-key: ${{ secrets.DEPLOY_KEY }}
+          arns-key: ${{ secrets.ARNS_KEY }}
           arns-name: myapp
-          sig-type: solana
           preview: 'true'
           github-token: ${{ secrets.GITHUB_TOKEN }}
           deploy-folder: ./dist
@@ -420,8 +438,8 @@ jobs:
         uses: ar-io/ar-io-deploy@v1
         with:
           deploy-key: ${{ secrets.DEPLOY_KEY }}
+          arns-key: ${{ secrets.ARNS_KEY }}
           arns-name: myapp
-          sig-type: solana
           deploy-folder: ./dist
 ```
 
@@ -432,8 +450,8 @@ jobs:
   uses: ar-io/ar-io-deploy@v1
   with:
     deploy-key: ${{ secrets.DEPLOY_KEY }}
+    arns-key: ${{ secrets.ARNS_KEY }}
     arns-name: myapp
-    sig-type: solana
     deploy-folder: ./dist
     on-demand: ario
     max-token-amount: '2.0'
@@ -441,16 +459,16 @@ jobs:
 
 ### Updating ArNS (Solana)
 
-ArNS updates run against the Solana ARIO programs, so set `sig-type: solana` and provide a Solana `DEPLOY_KEY` (base58 secret key). Use `cluster` to target `mainnet` (default) or `devnet`, and `rpc-url` for a custom RPC endpoint.
+ArNS updates run against the Solana ARIO programs. Provide the Solana ArNS authority key via `arns-key` (a base58 Solana secret key); the upload is still paid for by `deploy-key`. Use `cluster` to target `mainnet` (default) or `devnet`, and `rpc-url` for a custom RPC endpoint.
 
 ```yaml
 - name: Deploy and update ArNS
   uses: ar-io/ar-io-deploy@v1
   with:
-    deploy-key: ${{ secrets.DEPLOY_KEY }}
+    deploy-key: ${{ secrets.DEPLOY_KEY }} # upload key
+    arns-key: ${{ secrets.ARNS_KEY }} # Solana ArNS authority key
     arns-name: myapp
     deploy-folder: ./dist
-    sig-type: solana
     cluster: mainnet
 ```
 
@@ -545,9 +563,11 @@ jobs:
       - run: pnpm build
 
       - name: Deploy with ARIO on-demand
-        run: ario-deploy deploy --arns-name my-app --sig-type solana --on-demand ario --max-token-amount 2.0
+        run: ario-deploy deploy --arns-name my-app --on-demand ario --max-token-amount 2.0
         env:
-          DEPLOY_KEY: ${{ secrets.DEPLOY_KEY }}
+          DEPLOY_KEY: ${{ secrets.DEPLOY_KEY }} # upload key (pays for the upload)
+          ARNS_KEY: ${{ secrets.ARNS_KEY }} # Solana ArNS authority key
+
 
       # Or upload with Ethereum and Base-ETH on-demand payment (upload only; ArNS requires Solana):
       # - name: Upload with Base-ETH on-demand
