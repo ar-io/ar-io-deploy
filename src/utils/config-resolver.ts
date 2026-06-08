@@ -1,3 +1,11 @@
+/* eslint-disable @typescript-eslint/no-explicit-any --
+ * This is a generic flag-config utility that holds a heterogeneous map of oclif
+ * flag definitions (string/boolean/number/custom) keyed by name. The `any`s are
+ * load-bearing: replacing them with the precise oclif `OptionFlag`/`FlagInput`
+ * types breaks `static flags` integration and transform-function variance.
+ * Concrete types are recovered at call sites via `ResolvedConfig<T>` inference.
+ */
+
 /**
  * Configuration for a single flag with its associated prompt
  */

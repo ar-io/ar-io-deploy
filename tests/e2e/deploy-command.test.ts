@@ -541,5 +541,5 @@ describe(
       })
     })
   },
-  { timeout: 30_000 },
+  { timeout: 60_000 },
 )

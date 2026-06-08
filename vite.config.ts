@@ -50,6 +50,12 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
+    // The e2e tests load the built CLI, which imports the heavy @ar.io/sdk
+    // (Solana) and @solana/kit graphs. On a cold cache vitest pre-bundles these
+    // with esbuild on first import, which can exceed the default 5s/30s timeouts
+    // for whichever test triggers it first (warm runs are ~1.5s).
+    testTimeout: 60000,
+    hookTimeout: 60000,
     env: {
       // Enable MSW verbose logging by default (can be disabled with MSW_VERBOSE=false)
       MSW_VERBOSE: process.env.MSW_VERBOSE ?? 'true',
