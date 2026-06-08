@@ -112,16 +112,5 @@
   "bugs": {
     "url": "https://github.com/ar-io/ar-io-deploy/issues"
   },
-  "homepage": "https://github.com/ar-io/ar-io-deploy#readme",
-  "lint-staged": {
-    "{src,tests}/**/*.{ts,tsx}": [
-      "eslint --fix --max-warnings=0",
-      "prettier --write"
-    ],
-    "README.md": [
-      "markdown-toc-gen insert --max-depth 2",
-      "prettier --write"
-    ],
-    "!(README).{json,md,yml,yaml}": "prettier --write"
-  }
+  "homepage": "https://github.com/ar-io/ar-io-deploy#readme"
 }
