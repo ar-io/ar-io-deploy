@@ -42,5 +42,5 @@ oclif.manifest.json
 
 # Misc
 .husky/_
-.permaweb-deploy/
+.ario-deploy/
 ._*
