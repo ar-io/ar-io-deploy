@@ -2,6 +2,32 @@
 
 Inspired by the [cookbook github action deployment guide](https://cookbook.arweave.dev/guides/deployment/github-action.html), `ario-deploy` is a Node.js command-line tool designed to streamline the deployment of web applications to the permaweb using Arweave. It uploads your build folder or a single file, creates Arweave manifests, and can optionally update ArNS (Arweave Name Service) records via ANT (Arweave Name Token) with the transaction ID.
 
+## Table of Contents
+
+<!-- toc -->
+
+- [Table of Contents](#table-of-contents)
+- [Features](#features)
+- [Installation](#installation)
+- [Prerequisites](#prerequisites)
+- [Commands](#commands)
+- [On-Demand Payment](#on-demand-payment)
+- [Bundler service](#bundler-service)
+- [Command Options](#command-options)
+- [Deduplication](#deduplication)
+- [Package.json Scripts](#packagejson-scripts)
+- [GitHub Action](#github-action)
+- [CLI in GitHub Actions](#cli-in-github-actions)
+- [Development](#development)
+- [Security & Best Practices](#security--best-practices)
+- [Troubleshooting](#troubleshooting)
+- [Contributing](#contributing)
+- [Dependencies](#dependencies)
+- [License](#license)
+- [Resources](#resources)
+
+<!-- tocstop -->
+
 ## Features
 
 - **Turbo SDK Integration:** Uses Turbo SDK for fast, reliable file uploads to Arweave

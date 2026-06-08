@@ -21,6 +21,7 @@
     "lint:fix": "eslint . --ext .ts --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
+    "docs:update": "markdown-toc-gen insert README.md --max-depth 2",
     "generate:types": "openapi-typescript tests/fixtures/upload-service.openapi.yaml -o tests/types/upload-service.ts && openapi-typescript tests/fixtures/payment-service.openapi.yaml -o tests/types/payment-service.ts",
     "prepare": "husky install",
     "changeset": "changeset",
@@ -84,6 +85,7 @@
     "eslint-plugin-simple-import-sort": "^12.1.1",
     "husky": "^9.1.7",
     "lint-staged": "^16.4.0",
+    "markdown-toc-gen": "^1.0.1",
     "msw": "^2.11.3",
     "openapi-typescript": "^7.9.1",
     "prettier": "^3.4.2",
@@ -116,6 +118,10 @@
       "eslint --fix --max-warnings=0",
       "prettier --write"
     ],
-    "*.{json,md,yml,yaml}": "prettier --write"
+    "README.md": [
+      "markdown-toc-gen insert --max-depth 2",
+      "prettier --write"
+    ],
+    "!(README).{json,md,yml,yaml}": "prettier --write"
   }
 }
