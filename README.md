@@ -52,7 +52,7 @@ yarn add --dev @ar.io/deploy
 
 > **ArNS updates require a Solana signer.** ArNS/ANT records now live on Solana programs, so any deployment that updates ArNS (`--use-arns` / `--arns-name`) must use `--sig-type solana`. Uploads alone can use any supported signer.
 
-## Usage
+## Commands
 
 ### Interactive Mode (Easiest)
 
@@ -168,7 +168,7 @@ Upload using a Solana wallet (base58 private key):
 ario-deploy deploy --sig-type solana --private-key "<base58-secret-key>"
 ```
 
-### On-Demand Payment
+## On-Demand Payment
 
 Use on-demand payment to automatically fund uploads with ARIO or Base-ETH tokens when your Turbo balance is insufficient:
 
@@ -201,7 +201,7 @@ ario-deploy deploy --sig-type ethereum --private-key "0x..." --on-demand base-et
 - **ARIO**: Works with Arweave signer
 - **Base-ETH**: Works with Ethereum signer (Base Network)
 
-### Bundler service
+## Bundler service
 
 Uploads go through a bundler service that accepts signed data items and posts them to Arweave. By default, ario-deploy uses the [Turbo](https://docs.ardrive.io/docs/turbo/) API and ArDrive’s production bundler (`https://upload.ardrive.io`). **`--uploader`** sets the **base URL** of the bundler service to use (scheme + host; typically no path).
 
@@ -226,7 +226,7 @@ ario-deploy upload --wallet ./wallet.json --deploy-folder ./dist --uploader http
 - Turbo billing and signer behavior follow Turbo.
 - Use a **base URL only** (e.g. `https://up.arweave.net`), not a path to a specific file or route.
 
-### Command Options
+## Command Options
 
 **`deploy`** (upload by default, optional ArNS update):
 
@@ -245,11 +245,11 @@ ario-deploy upload --wallet ./wallet.json --deploy-folder ./dist --uploader http
 - `--max-token-amount`: Maximum token amount for on-demand payment (used with `--on-demand`)
 - `--no-dedupe`: Disable deduplication (do not cache or reuse previous uploads)
 - `--dedupe-cache-max-entries`: Maximum number of entries to keep in the dedupe cache (LRU). Default: `10000`
-- `--uploader`: Custom Turbo upload service base URL. See [Bundler service](#bundler-service) above.
+- `--uploader`: Custom Turbo upload service base URL. See the **Bundler service** section.
 
 **`upload`** (explicit upload without ArNS): accepts `--deploy-folder`, `--deploy-file`, wallet/signer flags, `--uploader`, `--on-demand` / `--max-token-amount`, and dedupe flags only.
 
-### Deduplication
+## Deduplication
 
 By default, ario-deploy caches your deployment log to prevent uploading duplicate (unchanged) files. This saves both time and upload costs by reusing existing data on Arweave.
 
@@ -286,7 +286,7 @@ The cache file is stored at `.ario-deploy/transaction-cache.json` in your projec
 - Commit it to share cached transaction IDs with your team (reduces duplicate uploads)
 - Delete it to start fresh: `rm -rf .ario-deploy/`
 
-### Package.json Scripts
+## Package.json Scripts
 
 Add deployment scripts to your `package.json`:
 
@@ -659,13 +659,9 @@ Follow the prompts to describe your changes.
 
 ## License
 
-MIT
+MIT — © Permanent Data Solutions, Inc.
 
-## Author
-
-Permanent Data Solutions, Inc.
-
-## Links
+## Resources
 
 - [GitHub Repository](https://github.com/ar-io/ar-io-deploy)
 - [Issues](https://github.com/ar-io/ar-io-deploy/issues)
