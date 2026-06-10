@@ -27,18 +27,15 @@ jobs:
           token: ${{ secrets.DEPLOY_PAT || github.token }}
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
-          node-version: '22'
+          node-version: '24'
           registry-url: https://registry.npmjs.org
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
           version: 10
-
-      - name: Upgrade npm for OIDC trusted publishing
-        run: npm install -g npm@latest && npm --version
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -68,11 +65,9 @@ jobs:
             fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
           "
 
-      - name: Publish to NPM (alpha tag) via OIDC
-        run: |
-          # Use npm trust to exchange OIDC token for a short-lived npm publish token
-          npm trust --registry=https://registry.npmjs.org
-          npm publish --access public --tag alpha --provenance --registry=https://registry.npmjs.org
+      - name: Publish to NPM (alpha tag)
+        # NODE_AUTH_TOKEN is NOT required with OIDC trusted publishing
+        run: npm publish --access public --tag alpha --provenance --registry=https://registry.npmjs.org
 
       - name: Summary
         run: |
