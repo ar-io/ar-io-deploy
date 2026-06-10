@@ -5,7 +5,7 @@ import { Command } from '@oclif/core'
 import ora from 'ora'
 
 import { type DeployConfig, deployFlagConfigs } from '../constants/flags.js'
-import { promptAdvancedOptions } from '../prompts/arns.js'
+import { promptAdvancedOptions, promptUpdateArns } from '../prompts/arns.js'
 import { getWalletConfig } from '../prompts/wallet.js'
 import { chalk } from '../utils/chalk.js'
 import { extractFlags, resolveConfig } from '../utils/config-resolver.js'
@@ -30,8 +30,8 @@ export default class Deploy extends Command {
     '<%= config.bin %> deploy --wallet ./wallet.json',
     '<%= config.bin %> deploy --wallet ./wallet.json --deploy-folder ./dist',
     '<%= config.bin %> deploy --wallet ./wallet.json --deploy-file ./dist/index.html',
-    '<%= config.bin %> deploy --wallet ./id.json --sig-type solana --use-arns --arns-name my-app',
-    '<%= config.bin %> deploy --wallet ./id.json --sig-type solana --use-arns --arns-name my-app --undername staging',
+    '<%= config.bin %> deploy --wallet ./wallet.json --use-arns --arns-name my-app --arns-wallet ./arns-id.json',
+    '<%= config.bin %> deploy --wallet ./wallet.json --use-arns --arns-name my-app --arns-wallet ./arns-id.json --undername staging',
   ]
 
   static override flags = extractFlags(deployFlagConfigs)
@@ -40,11 +40,37 @@ export default class Deploy extends Command {
     try {
       const { flags } = await this.parse(Deploy)
 
-      const useArns = Boolean(flags['use-arns'] || flags['arns-name'])
-      const interactive = useArns && !flags['arns-name']
+      const hasArnsName = Boolean(flags['arns-name'])
+      const explicitUseArns = Boolean(flags['use-arns'])
+      const canPrompt = Boolean(process.stdout.isTTY) && !process.env.CI
+
+      // Decide whether to update ArNS and whether to run interactive prompts.
+      // When no ArNS details are supplied we ask by default (in a TTY); the
+      // resolveConfig pass below then prompts for the name and other missing
+      // values. A non-interactive environment falls back to upload-only.
+      let useArns = hasArnsName || explicitUseArns
+      let interactive = false
+
+      if (hasArnsName) {
+        interactive = false
+      } else if (explicitUseArns) {
+        interactive = canPrompt
+      } else if (canPrompt) {
+        useArns = await promptUpdateArns()
+        interactive = useArns
+      }
 
       if (interactive) {
-        this.log(chalk.bold(chalk.cyan('\nInteractive ArNS Deployment Mode\n')))
+        this.log(chalk.bold(chalk.cyan('\nInteractive Deployment Mode\n')))
+        if (useArns) {
+          this.log(
+            chalk.dim(
+              'Two keys are used:\n' +
+                '  • Upload key — pays for the upload (any supported chain)\n' +
+                '  • ArNS authority key — a Solana key that controls the name and signs the update\n',
+            ),
+          )
+        }
       }
 
       const baseConfig = (await resolveConfig<typeof deployFlagConfigs>(deployFlagConfigs, flags, {
@@ -57,13 +83,46 @@ export default class Deploy extends Command {
       }
 
       const shouldPromptWallet =
+        canPrompt &&
         !baseConfig.wallet &&
         !baseConfig['private-key'] &&
         (interactive || !process.env.DEPLOY_KEY?.trim())
 
       if (shouldPromptWallet) {
-        const config = await getWalletConfig()
+        const config = await getWalletConfig({
+          envVar: 'DEPLOY_KEY',
+          label: 'upload key',
+          purpose: 'pays for the upload',
+        })
         walletConfig = {
+          privateKey: config.privateKey,
+          wallet: config.wallet,
+        }
+      }
+
+      // ArNS authority key — separate from the upload key. Always a Solana key
+      // that controls the ArNS name and signs the ANT record update. Only needed
+      // when updating ArNS.
+      let arnsKeyConfig: { privateKey?: string; wallet?: string } = {
+        privateKey: baseConfig['arns-private-key'],
+        wallet: baseConfig['arns-wallet'],
+      }
+
+      const shouldPromptArnsKey =
+        canPrompt &&
+        useArns &&
+        !arnsKeyConfig.wallet &&
+        !arnsKeyConfig.privateKey &&
+        (interactive || !process.env.ARNS_KEY?.trim())
+
+      if (shouldPromptArnsKey) {
+        const config = await getWalletConfig({
+          envVar: 'ARNS_KEY',
+          fileDefault: './arns-wallet.json',
+          label: 'ArNS authority key',
+          purpose: 'controls the ArNS name and signs the record update',
+        })
+        arnsKeyConfig = {
           privateKey: config.privateKey,
           wallet: config.wallet,
         }
@@ -90,6 +149,8 @@ export default class Deploy extends Command {
 
       const deployConfig: DeployConfig = {
         'arns-name': baseConfig['arns-name'],
+        'arns-private-key': arnsKeyConfig.privateKey,
+        'arns-wallet': arnsKeyConfig.wallet,
         cluster: advancedOptions?.cluster || baseConfig.cluster,
         'dedupe-cache-max-entries': effectiveCacheMaxEntries,
         'deploy-file': baseConfig['deploy-file'],
@@ -111,29 +172,57 @@ export default class Deploy extends Command {
         this.log('')
       }
 
-      if (deployConfig['use-arns'] && deployConfig['sig-type'] !== 'solana') {
-        this.error('ArNS updates require --sig-type solana (ArNS records live on Solana)')
-      }
+      // Resolve a deploy key from a wallet file, a private-key string, or an
+      // environment variable. Used for both the upload key and the (Solana)
+      // ArNS authority key — they are independent inputs.
+      const resolveKey = (key: {
+        envVar: string
+        missing: string
+        privateKey?: string
+        sigType: string
+        walletPath?: string
+      }): string => {
+        if (key.walletPath) {
+          const resolvedPath = expandPath(key.walletPath)
+          if (!fs.existsSync(resolvedPath)) {
+            this.error(`Wallet file [${key.walletPath}] does not exist`)
+          }
 
-      let deployKey: string
-      if (deployConfig.wallet) {
-        const walletPath = expandPath(deployConfig.wallet)
-        if (!fs.existsSync(walletPath)) {
-          this.error(`Wallet file [${deployConfig.wallet}] does not exist`)
+          return deployKeyFromWalletFile(key.sigType, fs.readFileSync(resolvedPath, 'utf8'))
         }
 
-        const walletContent = fs.readFileSync(walletPath, 'utf8')
-        deployKey = deployKeyFromWalletFile(deployConfig['sig-type'], walletContent)
-      } else if (deployConfig['private-key']) {
-        deployKey = deployKeyFromPrivateKey(deployConfig['sig-type'], deployConfig['private-key'])
-      } else {
-        deployKey = process.env.DEPLOY_KEY || ''
-        if (!deployKey) {
-          this.error(
-            'DEPLOY_KEY environment variable not set. Use --wallet, --private-key, or set DEPLOY_KEY',
-          )
+        if (key.privateKey) {
+          return deployKeyFromPrivateKey(key.sigType, key.privateKey)
         }
+
+        const envValue = process.env[key.envVar]?.trim()
+        if (envValue) {
+          return envValue
+        }
+
+        return this.error(key.missing)
       }
+
+      const deployKey = resolveKey({
+        envVar: 'DEPLOY_KEY',
+        missing:
+          'No upload key provided. Use --wallet, --private-key, or set DEPLOY_KEY (the key that pays for the upload).',
+        privateKey: deployConfig['private-key'],
+        sigType: deployConfig['sig-type'],
+        walletPath: deployConfig.wallet,
+      })
+
+      // ArNS authority key is always a Solana key, independent of the upload key.
+      const arnsAuthorityKey = deployConfig['use-arns']
+        ? resolveKey({
+            envVar: 'ARNS_KEY',
+            missing:
+              'No ArNS authority key provided. Use --arns-wallet, --arns-private-key, or set ARNS_KEY (the Solana key that controls the ArNS name).',
+            privateKey: deployConfig['arns-private-key'],
+            sigType: 'solana',
+            walletPath: deployConfig['arns-wallet'],
+          })
+        : ''
 
       this.log(chalk.bold(chalk.cyan('\nStarting deployment...\n')))
       try {
@@ -193,7 +282,7 @@ export default class Deploy extends Command {
         this.log('')
 
         spinner.start('Updating ANT record')
-        const signer = await createSolanaArnsSigner(deployKey)
+        const signer = await createSolanaArnsSigner(arnsAuthorityKey)
         const ant = new SolanaANTWriteable({
           processId: arnsNameRecord.processId,
           rpc,

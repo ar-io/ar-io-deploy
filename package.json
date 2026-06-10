@@ -1,6 +1,6 @@
 {
   "name": "@ar.io/deploy",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "ARIO Deploy — CLI for deploying apps to the permaweb (Arweave) and updating ArNS",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -24,20 +24,13 @@
     "docs:update": "markdown-toc-gen insert README.md --max-depth 2",
     "generate:types": "openapi-typescript tests/fixtures/upload-service.openapi.yaml -o tests/types/upload-service.ts && openapi-typescript tests/fixtures/payment-service.openapi.yaml -o tests/types/payment-service.ts",
     "prepare": "husky install",
-    "changeset": "changeset",
-    "version": "changeset version",
-    "version:alpha": "changeset version --snapshot alpha",
-    "version:snapshot": "changeset version --snapshot rc",
-    "release": "changeset publish --tag latest",
-    "release:alpha": "changeset publish --tag alpha",
-    "release:snapshot": "changeset publish --tag rc --no-git-tag"
+    "release": "semantic-release"
   },
   "oclif": {
     "bin": "ario-deploy",
     "dirname": "ario-deploy",
     "commands": "./dist/commands",
     "topicSeparator": " ",
-    "default": "interactive",
     "topics": {
       "deploy": {
         "description": "Deploy to the permaweb"
@@ -53,7 +46,7 @@
     "oclif.manifest.json"
   ],
   "dependencies": {
-    "@ar.io/sdk": "4.0.0-solana.38",
+    "@ar.io/sdk": "4.0.2-alpha.4",
     "@ardrive/turbo-sdk": "^1.41.3",
     "@dha-team/arbundles": "^1.0.4",
     "@inquirer/prompts": "^7.2.0",
@@ -65,7 +58,8 @@
     "p-limit": "^7.2.0"
   },
   "devDependencies": {
-    "@changesets/cli": "^2.27.10",
+    "@semantic-release/changelog": "^6.0.3",
+    "@semantic-release/git": "^10.0.1",
     "@commitlint/cli": "^19.6.0",
     "@commitlint/config-conventional": "^19.6.0",
     "@oclif/prettier-config": "^0.2.1",
@@ -89,6 +83,7 @@
     "msw": "^2.11.3",
     "openapi-typescript": "^7.9.1",
     "prettier": "^3.4.2",
+    "semantic-release": "^24.2.3",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
     "vite": "^6.0.5",

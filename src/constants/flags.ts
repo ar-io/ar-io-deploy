@@ -27,6 +27,30 @@ export const globalFlags = {
     prompt: promptArnsName,
     triggersInteractive: true,
   }),
+  arnsPrivateKey: createFlagConfig<string | undefined>({
+    flag: Flags.string({
+      description:
+        'ArNS authority key: base58 Solana secret key that controls the ArNS name and signs the record update (alternative to --arns-wallet). Falls back to the ARNS_KEY env var. This is separate from the upload key.',
+      exclusive: ['arns-wallet'],
+      required: false,
+    }),
+  }),
+  arnsWallet: createFlagConfig<string | undefined>({
+    flag: Flags.string({
+      description:
+        'ArNS authority key: path to the Solana wallet file (solana-keygen id.json) that controls the ArNS name and signs the record update. Falls back to the ARNS_KEY env var. This is separate from the upload key.',
+      exclusive: ['arns-private-key'],
+      async parse(input) {
+        const validation = validateFileExists(input)
+        if (validation !== true) {
+          throw new Error(validation)
+        }
+
+        return input
+      },
+      required: false,
+    }),
+  }),
   cluster: createFlagConfig<string>({
     flag: Flags.string({
       char: 'p',
@@ -109,7 +133,7 @@ export const globalFlags = {
     flag: Flags.string({
       char: 'k',
       description:
-        'Private key string (alternative to --wallet). JWK JSON for Arweave, hex for EVM chains, base58 secret key for Solana.',
+        'Upload key (pays for the upload): private key string, alternative to --wallet. JWK JSON for Arweave, hex for EVM chains, base58 secret key for Solana.',
       exclusive: ['wallet'],
       required: false,
     }),
@@ -124,7 +148,7 @@ export const globalFlags = {
     flag: Flags.string({
       char: 's',
       default: 'arweave',
-      description: 'Signer type for deployment. ArNS updates require solana.',
+      description: 'Signer type for the upload key (pays for the upload).',
       options: ['arweave', 'ethereum', 'polygon', 'kyve', 'solana'],
       required: false,
     }),
@@ -180,7 +204,7 @@ export const globalFlags = {
     flag: Flags.string({
       char: 'w',
       description:
-        'Path to wallet file (JWK for Arweave, private key for EVM chains, solana-keygen id.json for Solana)',
+        'Upload key (pays for the upload): path to wallet file. JWK for Arweave, private key for EVM chains, solana-keygen id.json for Solana.',
       exclusive: ['private-key'],
       async parse(input) {
         const validation = validateFileExists(input)
@@ -200,6 +224,8 @@ export const globalFlags = {
  */
 export const deployFlags = {
   'arns-name': globalFlags.arnsName.flag,
+  'arns-private-key': globalFlags.arnsPrivateKey.flag,
+  'arns-wallet': globalFlags.arnsWallet.flag,
   cluster: globalFlags.cluster.flag,
   'dedupe-cache-max-entries': globalFlags.dedupeCacheMaxEntries.flag,
   'deploy-file': globalFlags.deployFile.flag,
@@ -222,6 +248,8 @@ export const deployFlags = {
  */
 export const arnsFlags = {
   'arns-name': globalFlags.arnsName.flag,
+  'arns-private-key': globalFlags.arnsPrivateKey.flag,
+  'arns-wallet': globalFlags.arnsWallet.flag,
   cluster: globalFlags.cluster.flag,
   'rpc-url': globalFlags.rpcUrl.flag,
   'ttl-seconds': globalFlags.ttlSeconds.flag,
@@ -242,6 +270,8 @@ export const walletFlags = {
  */
 export interface DeployConfig {
   'arns-name'?: string
+  'arns-private-key'?: string
+  'arns-wallet'?: string
   cluster: string
   'dedupe-cache-max-entries': number
   'deploy-file'?: string
@@ -265,6 +295,8 @@ export interface DeployConfig {
  */
 export const deployFlagConfigs = {
   'arns-name': globalFlags.arnsName,
+  'arns-private-key': globalFlags.arnsPrivateKey,
+  'arns-wallet': globalFlags.arnsWallet,
   cluster: globalFlags.cluster,
   'dedupe-cache-max-entries': globalFlags.dedupeCacheMaxEntries,
   'deploy-file': globalFlags.deployFile,

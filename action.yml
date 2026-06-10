@@ -7,7 +7,10 @@ branding:
 
 inputs:
   deploy-key:
-    description: 'Arweave JWK wallet (base64-encoded or JSON string) for Arweave signer, or raw private key for Ethereum/Polygon/KYVE signers'
+    description: 'Upload key (pays for the upload): Arweave JWK wallet (base64-encoded or JSON string), or raw private key for Ethereum/Polygon/KYVE/Solana signers'
+    required: true
+  arns-key:
+    description: 'ArNS authority key: base58-encoded Solana secret key that controls the ArNS name and signs the record update. Separate from the upload key.'
     required: true
   arns-name:
     description: 'The ArNS name to update (e.g., "myapp" for myapp.turbo-gateway.com)'
@@ -28,7 +31,7 @@ inputs:
     required: false
     default: '3600'
   sig-type:
-    description: 'Signer type for deployment (arweave, ethereum, polygon, kyve, solana). ArNS updates require solana.'
+    description: 'Signer type for the upload key that pays for the upload (arweave, ethereum, polygon, kyve, solana).'
     required: false
     default: 'arweave'
   cluster:
@@ -147,6 +150,7 @@ runs:
       shell: bash
       env:
         DEPLOY_KEY: ${{ inputs.deploy-key }}
+        ARNS_KEY: ${{ inputs.arns-key }}
       run: |
         # Handle deploy key format (base64 or JSON)
         if [[ "$DEPLOY_KEY" =~ ^[A-Za-z0-9+/]+=*$ ]]; then

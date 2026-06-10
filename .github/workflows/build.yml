@@ -1,0 +1,73 @@
+name: Build and Test
+
+concurrency:
+  group: ${{ github.ref_name }}
+  cancel-in-progress: true
+
+on:
+  push:
+    branches-ignore:
+      - main
+      - alpha
+  workflow_dispatch:
+  workflow_call:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node_version: [18.x, 20.x]
+        command: [lint, format:check, build]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node_version }}
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - run: pnpm ${{ matrix.command }}
+
+      - name: Upload build artifacts
+        if: matrix.command == 'build' && matrix.node_version == '20.x'
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-artifacts
+          path: |
+            dist/
+            !**/*.map
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build (required for e2e tests, which load from dist)
+        run: pnpm build
+
+      - name: Run tests
+        run: pnpm test:run

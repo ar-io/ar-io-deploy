@@ -1,4 +1,13 @@
 packages:
   - '.'
+allowBuilds:
+  '@ar.io/solana-contracts': true
+  bufferutil: true
+  esbuild: true
+  keccak: true
+  msw: true
+  secp256k1: true
+  unrs-resolver: true
+  utf-8-validate: true
 onlyBuiltDependencies:
   - hyperbalance
