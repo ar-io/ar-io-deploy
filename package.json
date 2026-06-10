@@ -60,6 +60,7 @@
   "devDependencies": {
     "@semantic-release/changelog": "^6.0.3",
     "@semantic-release/git": "^10.0.1",
+    "@semantic-release/npm": "^13.1.1",
     "@commitlint/cli": "^19.6.0",
     "@commitlint/config-conventional": "^19.6.0",
     "@oclif/prettier-config": "^0.2.1",
@@ -83,7 +84,7 @@
     "msw": "^2.11.3",
     "openapi-typescript": "^7.9.1",
     "prettier": "^3.4.2",
-    "semantic-release": "^24.2.3",
+    "semantic-release": "^25.0.1",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
     "vite": "^6.0.5",
