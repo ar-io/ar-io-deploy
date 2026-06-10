@@ -8,6 +8,7 @@ on:
 permissions:
   contents: write
   pull-requests: read
+  id-token: write # npm provenance via OIDC
 
 concurrency:
   group: npm-release-alpha
@@ -64,13 +65,8 @@ jobs:
             fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
           "
 
-      - name: Verify npm authentication
-        run: npm whoami --registry=https://registry.npmjs.org
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
       - name: Publish to NPM (alpha tag)
-        run: npm publish --access public --tag alpha --registry=https://registry.npmjs.org
+        run: npm publish --access public --tag alpha --provenance --registry=https://registry.npmjs.org
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
