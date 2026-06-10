@@ -30,8 +30,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '22'
-          # Do NOT set registry-url here — it writes an .npmrc that
-          # overrides OIDC auth with an empty NODE_AUTH_TOKEN.
+          registry-url: https://registry.npmjs.org
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -39,7 +38,7 @@ jobs:
           version: 10
 
       - name: Upgrade npm for OIDC trusted publishing
-        run: npm install -g npm@latest
+        run: npm install -g npm@latest && npm --version
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -69,8 +68,11 @@ jobs:
             fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
           "
 
-      - name: Publish to NPM (alpha tag)
-        run: npm publish --access public --tag alpha --provenance --registry=https://registry.npmjs.org
+      - name: Publish to NPM (alpha tag) via OIDC
+        run: |
+          # Use npm trust to exchange OIDC token for a short-lived npm publish token
+          npm trust --registry=https://registry.npmjs.org
+          npm publish --access public --tag alpha --provenance --registry=https://registry.npmjs.org
 
       - name: Summary
         run: |
