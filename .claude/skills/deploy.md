@@ -55,10 +55,10 @@ Uploads to Arweave cost Turbo credits. Two options:
 
 ### 4. Set Up Environment Variables
 
-| Variable | Purpose | Format |
-|----------|---------|--------|
-| `DEPLOY_KEY` | Upload key (pays for upload) | Base58 (Solana), base64 JWK (Arweave), or hex (Ethereum) |
-| `ARNS_KEY` | ArNS authority key (updates name) | Base58 Solana secret key |
+| Variable     | Purpose                           | Format                                                   |
+| ------------ | --------------------------------- | -------------------------------------------------------- |
+| `DEPLOY_KEY` | Upload key (pays for upload)      | Base58 (Solana), base64 JWK (Arweave), or hex (Ethereum) |
+| `ARNS_KEY`   | ArNS authority key (updates name) | Base58 Solana secret key                                 |
 
 **Alternatively**, use file paths:
 
@@ -91,11 +91,11 @@ Ask the user:
 
 ### Step 2: Determine signer type(s)
 
-| Upload Signer | Key Format | ArNS Support |
-|---------------|-----------|--------------|
-| arweave (default) | Base64-encoded JWK | Needs separate `ARNS_KEY` |
-| ethereum | Hex private key (0x...) | Needs separate `ARNS_KEY` |
-| solana | Base58 secret key or id.json | Can also be `ARNS_KEY` |
+| Upload Signer     | Key Format                   | ArNS Support              |
+| ----------------- | ---------------------------- | ------------------------- |
+| arweave (default) | Base64-encoded JWK           | Needs separate `ARNS_KEY` |
+| ethereum          | Hex private key (0x...)      | Needs separate `ARNS_KEY` |
+| solana            | Base58 secret key or id.json | Can also be `ARNS_KEY`    |
 
 **ArNS updates always need a Solana key** — either as `ARNS_KEY` or the same key as `DEPLOY_KEY` when using `--sig-type solana`.
 
@@ -135,22 +135,22 @@ After successful deployment, report:
 
 ## Common Flags Reference
 
-| Flag | Description | Default |
-|------|-------------|---------|
-| `--deploy-folder, -d` | Folder to deploy | `./dist` |
-| `--deploy-file, -f` | Single file to deploy | — |
-| `--sig-type, -s` | Upload signer type | `arweave` |
-| `--wallet, -w` | Upload wallet file path | — |
-| `--private-key, -k` | Upload private key string | — |
-| `--arns-wallet` | ArNS authority wallet file (Solana id.json) | — |
-| `--arns-private-key` | ArNS authority key string (base58) | — |
-| `--arns-name, -n` | ArNS name to update | — |
-| `--undername, -u` | Subdomain/undername | `@` |
-| `--ttl-seconds, -t` | TTL for ArNS record | `60` |
-| `--cluster, -p` | Solana cluster | `mainnet` |
-| `--on-demand` | Auto-fund token type | — |
-| `--max-token-amount` | Max spend for on-demand | — |
-| `--no-dedupe` | Skip deduplication cache | `false` |
+| Flag                  | Description                                 | Default   |
+| --------------------- | ------------------------------------------- | --------- |
+| `--deploy-folder, -d` | Folder to deploy                            | `./dist`  |
+| `--deploy-file, -f`   | Single file to deploy                       | —         |
+| `--sig-type, -s`      | Upload signer type                          | `arweave` |
+| `--wallet, -w`        | Upload wallet file path                     | —         |
+| `--private-key, -k`   | Upload private key string                   | —         |
+| `--arns-wallet`       | ArNS authority wallet file (Solana id.json) | —         |
+| `--arns-private-key`  | ArNS authority key string (base58)          | —         |
+| `--arns-name, -n`     | ArNS name to update                         | —         |
+| `--undername, -u`     | Subdomain/undername                         | `@`       |
+| `--ttl-seconds, -t`   | TTL for ArNS record                         | `60`      |
+| `--cluster, -p`       | Solana cluster                              | `mainnet` |
+| `--on-demand`         | Auto-fund token type                        | —         |
+| `--max-token-amount`  | Max spend for on-demand                     | —         |
+| `--no-dedupe`         | Skip deduplication cache                    | `false`   |
 
 ## Interactive Mode
 
@@ -201,26 +201,26 @@ jobs:
 For PR previews:
 
 ```yaml
-      - name: Deploy Preview
-        uses: ar-io/ar-io-deploy@v1
-        with:
-          deploy-key: ${{ secrets.DEPLOY_KEY }}
-          arns-key: ${{ secrets.ARNS_KEY }}
-          arns-name: myapp
-          preview: 'true'
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          deploy-folder: ./dist
+- name: Deploy Preview
+  uses: ar-io/ar-io-deploy@v1
+  with:
+    deploy-key: ${{ secrets.DEPLOY_KEY }}
+    arns-key: ${{ secrets.ARNS_KEY }}
+    arns-name: myapp
+    preview: 'true'
+    github-token: ${{ secrets.GITHUB_TOKEN }}
+    deploy-folder: ./dist
 ```
 
 ## Troubleshooting
 
-| Error | Solution |
-|-------|----------|
-| "DEPLOY_KEY not set" | Set `DEPLOY_KEY` env var or use `--wallet`/`--private-key` |
-| "deploy-folder does not exist" | Build first (`npm run build`) or specify correct path |
-| "ArNS name does not exist" | Verify the name exists at https://arns.ar.io |
-| "Insufficient Turbo Credits" | Use `--on-demand ario` or fund wallet at https://turbo.ardrive.io |
-| ArNS update fails | Ensure `ARNS_KEY` or `--arns-wallet` is set with a Solana key that controls the ArNS name |
+| Error                          | Solution                                                                                  |
+| ------------------------------ | ----------------------------------------------------------------------------------------- |
+| "DEPLOY_KEY not set"           | Set `DEPLOY_KEY` env var or use `--wallet`/`--private-key`                                |
+| "deploy-folder does not exist" | Build first (`npm run build`) or specify correct path                                     |
+| "ArNS name does not exist"     | Verify the name exists at https://arns.ar.io                                              |
+| "Insufficient Turbo Credits"   | Use `--on-demand ario` or fund wallet at https://turbo.ardrive.io                         |
+| ArNS update fails              | Ensure `ARNS_KEY` or `--arns-wallet` is set with a Solana key that controls the ArNS name |
 
 ## Important Notes
 

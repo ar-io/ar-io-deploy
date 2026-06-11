@@ -45,10 +45,10 @@ solana-keygen export-private-key  # base58 key for DEPLOY_KEY / ARNS_KEY
 
 ### Set Environment Variables
 
-| Variable | Purpose | Format |
-|----------|---------|--------|
-| `DEPLOY_KEY` | Upload key | Base58 (Solana), base64 JWK (Arweave), or hex (Ethereum) |
-| `ARNS_KEY` | ArNS authority | Base58 Solana secret key |
+| Variable     | Purpose        | Format                                                   |
+| ------------ | -------------- | -------------------------------------------------------- |
+| `DEPLOY_KEY` | Upload key     | Base58 (Solana), base64 JWK (Arweave), or hex (Ethereum) |
+| `ARNS_KEY`   | ArNS authority | Base58 Solana secret key                                 |
 
 Or use `--wallet <path>` and `--arns-wallet <path>` to point to key files.
 
@@ -92,11 +92,11 @@ npx @ar.io/deploy deploy
 
 ## Signer Types
 
-| Type | Format | ArNS Support |
-|------|--------|-------------|
-| `arweave` (default) | Base64 JWK | Upload only (needs separate `ARNS_KEY`) |
-| `ethereum` | Hex key (0x...) | Upload only (needs separate `ARNS_KEY`) |
-| `solana` | Base58 secret key | Upload + can be `ARNS_KEY` too |
+| Type                | Format            | ArNS Support                            |
+| ------------------- | ----------------- | --------------------------------------- |
+| `arweave` (default) | Base64 JWK        | Upload only (needs separate `ARNS_KEY`) |
+| `ethereum`          | Hex key (0x...)   | Upload only (needs separate `ARNS_KEY`) |
+| `solana`            | Base58 secret key | Upload + can be `ARNS_KEY` too          |
 
 ## Key Flags
 
