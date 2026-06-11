@@ -23,7 +23,6 @@ jobs:
       contents: write # publish a GitHub release and push the release commit
       issues: write # comment on released issues
       pull-requests: write # comment on released pull requests
-      id-token: write # npm provenance via OIDC
     steps:
       - uses: actions/checkout@v4
         with:
