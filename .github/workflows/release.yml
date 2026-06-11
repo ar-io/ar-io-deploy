@@ -54,4 +54,5 @@ jobs:
       - name: Release
         env:
           GITHUB_TOKEN: ${{ secrets.DEPLOY_PAT || github.token }}
+          HUSKY: '0'
         run: pnpm semantic-release
