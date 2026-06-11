@@ -5,4 +5,5 @@ coverage
 *.config.ts
 .eslintrc.json
 tests/types
+CHANGELOG.md
 
