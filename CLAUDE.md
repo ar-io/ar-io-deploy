@@ -77,11 +77,13 @@ A copy-paste version for external projects lives at `examples/claude-skill/deplo
 
 ## Publishing
 
-Package is published as `@ar.io/deploy` on npm under the `@ar.io` org.
+Package is published as `@ar.io/deploy` on npm under the `@ar.io` org. Uses npm OIDC trusted publishers — no `NPM_TOKEN` needed.
 
-- **CI workflow** (`.github/workflows/ci.yml`): Runs lint, format, build, test on PRs to main. PRs must have exactly one version checkbox (major/minor/patch) in the body.
-- **Release workflow** (`.github/workflows/release.yml`): On merge to main, reads the version checkbox from the PR body, bumps `package.json`, commits, tags, and publishes to npm with the `latest` tag. Requires `NPM_TOKEN` and optional `DEPLOY_PAT` secrets.
-- **Manual release**: Trigger the release workflow via `workflow_dispatch` with a version type.
+- **Build workflow** (`.github/workflows/build.yml`): Runs lint, format, build, test on pushes to non-main/alpha branches and via `workflow_call`.
+- **Release workflow** (`.github/workflows/release.yml`): Uses `semantic-release` on pushes to `main` (stable `@latest`) and `alpha` (prerelease `@alpha`). Versioning is automatic from conventional commit messages (`feat:` = minor, `fix:` = patch, `feat!:` = major). Publishes to npm via OIDC, creates GitHub releases, updates CHANGELOG.md.
+- **Manual release**: Trigger the release workflow via `workflow_dispatch`.
+- **Branch channels**: `main` → `@latest` tag, `alpha` → `@alpha` tag (configured in `.releaserc.json`).
+- Package version is bumped automatically by CI — don't manually edit `version` in package.json on feature branches.
 
 ## GitHub Action
 
@@ -99,8 +101,9 @@ Key features: auto-dedup cache via `actions/cache`, PR preview mode with auto-ge
 
 ## Key Constraints
 
-- ArNS updates require Solana signer — other signer types can only upload
+- ArNS updates require a Solana key (`ARNS_KEY` / `--arns-wallet`) — upload key can be any supported signer
+- The upload key (`DEPLOY_KEY`) and ArNS authority key (`ARNS_KEY`) can be the same Solana wallet or separate wallets
 - Arweave uploads are permanent — verify builds before deploying
 - Build output goes to `dist/` with ESM format, no minification, source maps enabled
 - Node >= 18 required
-- Package version is bumped automatically by CI — don't manually edit `version` in package.json on feature branches
+- Package version is bumped automatically by semantic-release — don't manually edit `version` in package.json

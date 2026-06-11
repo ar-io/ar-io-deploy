@@ -1,6 +1,6 @@
 {
   "name": "@ar.io/deploy",
-  "version": "0.1.0",
+  "version": "1.0.0-alpha.2",
   "description": "ARIO Deploy — CLI for deploying apps to the permaweb (Arweave) and updating ArNS",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -58,12 +58,13 @@
     "p-limit": "^7.2.0"
   },
   "devDependencies": {
-    "@semantic-release/changelog": "^6.0.3",
-    "@semantic-release/git": "^10.0.1",
     "@commitlint/cli": "^19.6.0",
     "@commitlint/config-conventional": "^19.6.0",
     "@oclif/prettier-config": "^0.2.1",
     "@oclif/test": "^4.1.14",
+    "@semantic-release/changelog": "^6.0.3",
+    "@semantic-release/git": "^10.0.1",
+    "@semantic-release/npm": "^13.1.1",
     "@types/mime-types": "^2.1.4",
     "@types/node": "^22.10.2",
     "@typescript-eslint/eslint-plugin": "^8.18.1",
@@ -83,7 +84,7 @@
     "msw": "^2.11.3",
     "openapi-typescript": "^7.9.1",
     "prettier": "^3.4.2",
-    "semantic-release": "^24.2.3",
+    "semantic-release": "^25.0.5",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
     "vite": "^6.0.5",
