@@ -41,7 +41,7 @@ solana-keygen export-private-key
 
 ArNS names give you a permanent URL like `https://myapp.ar.io`.
 
-- **Purchase a name**: Go to https://arns.app and search for an available name
+- **Purchase a name**: Go to https://arns.ar.io and search for an available name
 - Names are purchased with ARIO tokens on Solana
 - Once purchased, the name is tied to an ANT (Ar.io Name Token) that your wallet controls
 - **Skip this step** if you only need upload-only (you'll get a raw Arweave tx URL instead)
@@ -78,7 +78,7 @@ Before deploying, verify:
    - `DEPLOY_KEY` environment variable (and `ARNS_KEY` if updating ArNS)
    - Wallet files (e.g., `wallet.json`, `id.json`, `~/.config/solana/id.json`)
    - Ask the user if neither is found
-4. **ArNS name exists** (if deploying with ArNS) — The user must have already purchased a name at https://arns.app
+4. **ArNS name exists** (if deploying with ArNS) — The user must have already purchased a name at https://arns.ar.io
 
 ## Deployment Flow
 
@@ -218,7 +218,7 @@ For PR previews:
 |-------|----------|
 | "DEPLOY_KEY not set" | Set `DEPLOY_KEY` env var or use `--wallet`/`--private-key` |
 | "deploy-folder does not exist" | Build first (`npm run build`) or specify correct path |
-| "ArNS name does not exist" | Verify the name exists at https://arns.app |
+| "ArNS name does not exist" | Verify the name exists at https://arns.ar.io |
 | "Insufficient Turbo Credits" | Use `--on-demand ario` or fund wallet at https://turbo.ardrive.io |
 | ArNS update fails | Ensure `ARNS_KEY` or `--arns-wallet` is set with a Solana key that controls the ArNS name |
 

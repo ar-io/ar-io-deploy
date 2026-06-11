@@ -34,7 +34,7 @@ solana-keygen export-private-key  # base58 key for DEPLOY_KEY / ARNS_KEY
 
 ### Get an ArNS Name (optional, for human-readable URLs)
 
-- Purchase a name at https://arns.app (costs ARIO tokens)
+- Purchase a name at https://arns.ar.io (costs ARIO tokens)
 - This gives you a permanent URL like `https://myapp.ar.io`
 - Skip if you only need a raw Arweave transaction URL
 
