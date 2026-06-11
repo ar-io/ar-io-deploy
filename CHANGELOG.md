@@ -1,3 +1,10 @@
+## [1.0.1](https://github.com/ar-io/ar-io-deploy/compare/v1.0.0...v1.0.1) (2026-06-11)
+
+
+### Bug Fixes
+
+* **ci:** add NODE_AUTH_TOKEN for npm publish in release workflow ([1da933a](https://github.com/ar-io/ar-io-deploy/commit/1da933a013978e6000e0df442bee2ac6e282fdd3))
+
 # 1.0.0 (2026-06-11)
 
 
