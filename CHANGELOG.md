@@ -1,3 +1,11 @@
+# [1.0.0-alpha.2](https://github.com/ar-io/ar-io-deploy/compare/v1.0.0-alpha.1...v1.0.0-alpha.2) (2026-06-11)
+
+
+### Bug Fixes
+
+* **ci:** format skill files, update build matrix to Node 20+22 ([b6c7bf8](https://github.com/ar-io/ar-io-deploy/commit/b6c7bf81e635379924e45fd06b22d63540162a04))
+* use arns.ar.io instead of arns.app in skill docs ([f7b6477](https://github.com/ar-io/ar-io-deploy/commit/f7b647752df10532b266df6c0f192a553ba4eab9))
+
 # 1.0.0-alpha.1 (2026-06-11)
 
 ### Bug Fixes

@@ -1,6 +1,6 @@
 {
   "name": "@ar.io/deploy",
-  "version": "1.0.0-alpha.1",
+  "version": "1.0.0-alpha.2",
   "description": "ARIO Deploy — CLI for deploying apps to the permaweb (Arweave) and updating ArNS",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
