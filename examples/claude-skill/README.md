@@ -2,29 +2,13 @@
 
 This is a ready-to-use Claude Code skill for deploying your app to the permaweb via AR.IO.
 
-<!-- toc -->
-
-- [Installation](#installation)
-- [Usage](#usage)
-- [Prerequisites](#prerequisites)
-- [Customization](#customization)
-
-<!-- tocstop -->
-
 ## Installation
 
 Copy the `deploy.md` file into your project's `.claude/skills/` directory:
 
 ```bash
 mkdir -p .claude/skills
-cp deploy.md .claude/skills/deploy.md
-```
-
-Or with curl:
-
-```bash
-mkdir -p .claude/skills
-curl -o .claude/skills/deploy.md https://raw.githubusercontent.com/ar-io/ar-io-deploy/main/examples/claude-skill/deploy.md
+curl -o .claude/skills/deploy.md https://raw.githubusercontent.com/ar-io/ar-io-deploy/alpha/examples/claude-skill/deploy.md
 ```
 
 ## Usage
@@ -48,8 +32,8 @@ Claude will:
 
 - Node.js >= 18
 - A wallet:
-  - **Solana** (for ArNS updates): base58 private key as `DEPLOY_KEY` env var
-  - **Arweave** (upload only): base64-encoded JWK as `DEPLOY_KEY` env var
+  - **Upload key** (`DEPLOY_KEY`): Any supported type — Solana (base58), Arweave (base64 JWK), or Ethereum (hex)
+  - **ArNS key** (`ARNS_KEY`): Solana base58 private key (only needed if updating ArNS names)
 - `@ar.io/deploy` installed (`npm install -g @ar.io/deploy` or as a devDependency)
 
 ## Customization

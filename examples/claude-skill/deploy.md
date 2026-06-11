@@ -10,22 +10,24 @@ Use when the user says: "deploy", "deploy to ar.io", "deploy to arweave", "publi
 
 If the user hasn't deployed to AR.IO before, guide them through setup:
 
-### Create a Wallet
+### Create Wallet(s)
 
-**For ArNS deployments (recommended)** — use a Solana wallet:
+A deployment uses up to **two keys**:
+
+- **Upload key** (`DEPLOY_KEY`) — pays for the upload. Any supported signer.
+- **ArNS authority key** (`ARNS_KEY`) — updates the ArNS name. Must be Solana. Only needed for ArNS.
+
+They can be the same Solana wallet or two different wallets.
+
+**Create a Solana wallet** (works for both):
 
 ```bash
-# Install Solana CLI
 sh -c "$(curl -sSfL https://release.anza.xyz/stable/install)"
-
-# Generate a keypair
 solana-keygen new
-
-# Get your base58 private key for DEPLOY_KEY
-solana-keygen export-private-key
+solana-keygen export-private-key  # base58 key for DEPLOY_KEY / ARNS_KEY
 ```
 
-**For upload-only** — an Arweave wallet works:
+**For upload-only** — an Arweave wallet also works:
 
 - Generate at https://arweave.app
 - Base64-encode the JWK: `base64 -i wallet.json`
@@ -41,15 +43,14 @@ solana-keygen export-private-key
 - **Pre-fund**: Buy Turbo credits at https://turbo.ardrive.io
 - **On-demand**: Use `--on-demand ario` to auto-convert ARIO tokens during deploy
 
-### Set DEPLOY_KEY
+### Set Environment Variables
 
-| Signer   | DEPLOY_KEY Format                                       |
-| -------- | ------------------------------------------------------- |
-| solana   | Base58 private key (`solana-keygen export-private-key`) |
-| arweave  | `base64 -i wallet.json`                                 |
-| ethereum | Hex private key (`0xabc...`)                            |
+| Variable | Purpose | Format |
+|----------|---------|--------|
+| `DEPLOY_KEY` | Upload key | Base58 (Solana), base64 JWK (Arweave), or hex (Ethereum) |
+| `ARNS_KEY` | ArNS authority | Base58 Solana secret key |
 
-Or use `--wallet <path>` to point to a key file instead.
+Or use `--wallet <path>` and `--arns-wallet <path>` to point to key files.
 
 ## How to Use
 
@@ -65,13 +66,12 @@ npm run build
 npx @ar.io/deploy deploy --deploy-folder ./dist
 ```
 
-### Deploy with ArNS Name (Solana Signer Required)
+### Deploy with ArNS Name
 
 ```bash
-DEPLOY_KEY=<solana-base58-key> npx @ar.io/deploy deploy \
+DEPLOY_KEY=<upload-key> ARNS_KEY=<solana-key> npx @ar.io/deploy deploy \
   --deploy-folder ./dist \
-  --arns-name YOUR_ARNS_NAME \
-  --sig-type solana
+  --arns-name YOUR_ARNS_NAME
 ```
 
 ### Interactive Mode
@@ -85,25 +85,25 @@ npx @ar.io/deploy deploy
 ## Deployment Steps
 
 1. **Build the project** — run the project's build command (e.g., `npm run build`, `pnpm build`)
-2. **Check for DEPLOY_KEY** — look for the environment variable or a wallet file
+2. **Check for keys** — look for `DEPLOY_KEY` (and `ARNS_KEY` if ArNS) or wallet files
 3. **Detect build folder** — check for `./dist`, `./build`, `./out`, or ask the user
 4. **Run deploy** — execute the appropriate `ario-deploy` command
 5. **Report results** — show the transaction ID and URLs
 
 ## Signer Types
 
-| Type       | Format            | ArNS Support  |
-| ---------- | ----------------- | ------------- |
-| `arweave`  | Base64 JWK        | Upload only   |
-| `ethereum` | Hex key (0x...)   | Upload only   |
-| `solana`   | Base58 secret key | Upload + ArNS |
+| Type | Format | ArNS Support |
+|------|--------|-------------|
+| `arweave` (default) | Base64 JWK | Upload only (needs separate `ARNS_KEY`) |
+| `ethereum` | Hex key (0x...) | Upload only (needs separate `ARNS_KEY`) |
+| `solana` | Base58 secret key | Upload + can be `ARNS_KEY` too |
 
 ## Key Flags
 
 - `--deploy-folder ./dist` — folder to upload (default: `./dist`)
 - `--deploy-file ./file.html` — upload a single file instead
-- `--arns-name myapp` — update ArNS record (requires solana signer)
-- `--sig-type solana` — signer type (required for ArNS)
+- `--arns-name myapp` — update ArNS record
+- `--arns-wallet ./id.json` — Solana wallet for ArNS authority
 - `--undername staging` — deploy to a subdomain (e.g., `staging_myapp.ar.io`)
 - `--on-demand ario` — auto-fund upload if balance is low
 - `--no-dedupe` — force re-upload all files
@@ -127,11 +127,13 @@ Add to `package.json` scripts:
 ```json
 {
   "scripts": {
-    "deploy": "npm run build && ario-deploy deploy --arns-name YOUR_NAME --sig-type solana",
-    "deploy:preview": "npm run build && ario-deploy deploy --arns-name YOUR_NAME --sig-type solana --undername preview"
+    "deploy": "npm run build && ario-deploy deploy --arns-name YOUR_NAME",
+    "deploy:preview": "npm run build && ario-deploy deploy --arns-name YOUR_NAME --undername preview"
   }
 }
 ```
+
+Then run with: `DEPLOY_KEY=<key> ARNS_KEY=<key> npm run deploy`
 
 ## CI/CD Setup
 
@@ -157,9 +159,12 @@ jobs:
       - uses: ar-io/ar-io-deploy@v1
         with:
           deploy-key: ${{ secrets.DEPLOY_KEY }}
+          arns-key: ${{ secrets.ARNS_KEY }}
           arns-name: YOUR_ARNS_NAME
-          sig-type: solana
           deploy-folder: ./dist
 ```
 
-Required secret: `DEPLOY_KEY` — your Solana base58 private key (for ArNS) or base64 Arweave JWK (upload only).
+Required secrets:
+
+- `DEPLOY_KEY` — upload wallet key (any signer type)
+- `ARNS_KEY` — Solana base58 private key for ArNS authority (only if updating ArNS)
