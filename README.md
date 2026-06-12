@@ -372,7 +372,7 @@ The easiest way to integrate ario-deploy into your CI/CD pipeline is using our o
 ### Basic Usage
 
 ```yaml
-- uses: ar-io/ar-io-deploy@v1
+- uses: ar-io/ar-io-deploy@v1.0.0
   with:
     deploy-key: ${{ secrets.DEPLOY_KEY }} # upload key (pays for the upload)
     arns-key: ${{ secrets.ARNS_KEY }} # Solana ArNS authority key
@@ -409,7 +409,7 @@ jobs:
         run: npm run build
 
       - name: Deploy Preview
-        uses: ar-io/ar-io-deploy@v1
+        uses: ar-io/ar-io-deploy@v1.0.0
         with:
           deploy-key: ${{ secrets.DEPLOY_KEY }}
           arns-key: ${{ secrets.ARNS_KEY }}
@@ -454,7 +454,7 @@ jobs:
         run: npm run build
 
       - name: Deploy to Permaweb
-        uses: ar-io/ar-io-deploy@v1
+        uses: ar-io/ar-io-deploy@v1.0.0
         with:
           deploy-key: ${{ secrets.DEPLOY_KEY }}
           arns-key: ${{ secrets.ARNS_KEY }}
@@ -466,7 +466,7 @@ jobs:
 
 ```yaml
 - name: Deploy with ARIO on-demand
-  uses: ar-io/ar-io-deploy@v1
+  uses: ar-io/ar-io-deploy@v1.0.0
   with:
     deploy-key: ${{ secrets.DEPLOY_KEY }}
     arns-key: ${{ secrets.ARNS_KEY }}
@@ -482,7 +482,7 @@ ArNS updates run against the Solana ARIO programs. Provide the Solana ArNS autho
 
 ```yaml
 - name: Deploy and update ArNS
-  uses: ar-io/ar-io-deploy@v1
+  uses: ar-io/ar-io-deploy@v1.0.0
   with:
     deploy-key: ${{ secrets.DEPLOY_KEY }} # upload key
     arns-key: ${{ secrets.ARNS_KEY }} # Solana ArNS authority key
@@ -497,7 +497,7 @@ By default, the action caches transaction IDs to avoid re-uploading unchanged fi
 
 ```yaml
 - name: Deploy without dedupe
-  uses: ar-io/ar-io-deploy@v1
+  uses: ar-io/ar-io-deploy@v1.0.0
   with:
     deploy-key: ${{ secrets.DEPLOY_KEY }}
     deploy-folder: ./dist
@@ -508,7 +508,7 @@ You can also limit the cache size:
 
 ```yaml
 - name: Deploy with limited cache
-  uses: ar-io/ar-io-deploy@v1
+  uses: ar-io/ar-io-deploy@v1.0.0
   with:
     deploy-key: ${{ secrets.DEPLOY_KEY }}
     deploy-folder: ./dist

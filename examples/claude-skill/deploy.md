@@ -156,7 +156,7 @@ jobs:
           node-version: '20'
       - run: npm ci
       - run: npm run build
-      - uses: ar-io/ar-io-deploy@v1
+      - uses: ar-io/ar-io-deploy@v1.0.0
         with:
           deploy-key: ${{ secrets.DEPLOY_KEY }}
           arns-key: ${{ secrets.ARNS_KEY }}
