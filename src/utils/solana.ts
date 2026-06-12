@@ -15,12 +15,17 @@ type ClusterProgramIds = Partial<
 export type SolanaCluster = 'devnet' | 'mainnet'
 
 /**
- * Normalize a Solana private key provided as a string. We accept a base58
- * encoded 64-byte secret key (the format wallets like Phantom export), which is
- * exactly what arbundles' HexSolanaSigner expects, so we just trim it.
+ * Normalize a Solana private key provided as a string. Accepts either a base58
+ * encoded 64-byte secret key (the format wallets like Phantom export) or a
+ * JSON array of bytes (solana-keygen id.json format).
  */
 export function solanaDeployKeyFromString(input: string): string {
-  return input.trim()
+  const trimmed = input.trim()
+  if (trimmed.startsWith('[')) {
+    return solanaDeployKeyFromFile(trimmed)
+  }
+
+  return trimmed
 }
 
 /**

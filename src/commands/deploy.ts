@@ -197,6 +197,10 @@ export default class Deploy extends Command {
 
         const envValue = process.env[key.envVar]?.trim()
         if (envValue) {
+          if (key.sigType === 'solana') {
+            return deployKeyFromPrivateKey(key.sigType, envValue)
+          }
+
           return envValue
         }
 
