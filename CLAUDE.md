@@ -90,7 +90,7 @@ Package is published as `@ar.io/deploy` on npm under the `@ar.io` org. Uses npm 
 The repo ships a composite GitHub Action (`action.yml`) that external projects use:
 
 ```yaml
-- uses: ar-io/ar-io-deploy@v1
+- uses: ar-io/ar-io-deploy@v1.0.0
   with:
     deploy-key: ${{ secrets.DEPLOY_KEY }}
     arns-name: myapp

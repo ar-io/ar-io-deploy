@@ -190,7 +190,7 @@ jobs:
           npm run build
 
       - name: Deploy to AR.IO
-        uses: ar-io/ar-io-deploy@v1
+        uses: ar-io/ar-io-deploy@v1.0.0
         with:
           deploy-key: ${{ secrets.DEPLOY_KEY }}
           arns-key: ${{ secrets.ARNS_KEY }}
@@ -202,7 +202,7 @@ For PR previews:
 
 ```yaml
 - name: Deploy Preview
-  uses: ar-io/ar-io-deploy@v1
+  uses: ar-io/ar-io-deploy@v1.0.0
   with:
     deploy-key: ${{ secrets.DEPLOY_KEY }}
     arns-key: ${{ secrets.ARNS_KEY }}
