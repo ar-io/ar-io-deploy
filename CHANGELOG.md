@@ -1,3 +1,10 @@
+## [1.0.1](https://github.com/ar-io/ar-io-deploy/compare/v1.0.0...v1.0.1) (2026-07-20)
+
+
+### Bug Fixes
+
+* **docs:** point staging bundler at the ar.io testnet ([e764d00](https://github.com/ar-io/ar-io-deploy/commit/e764d0047a970fdd3498ed1864550ca44dc7093b))
+
 # 1.0.0 (2026-06-11)
 
 
