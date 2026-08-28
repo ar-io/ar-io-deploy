@@ -49,6 +49,17 @@ jobs:
           registry-url: https://registry.npmjs.org
           cache: 'pnpm'
 
+      # npm itself performs the OIDC token exchange for trusted publishing;
+      # @semantic-release/npm only verifies that the exchange is possible and
+      # then deliberately writes no auth to .npmrc. The npm bundled with Node
+      # 22 is 10.x, which predates that support, so `npm publish` runs with no
+      # credentials at all and fails with ENEEDAUTH. Trusted publishing landed
+      # in npm 11.5.1.
+      - name: Use an npm that supports trusted publishing
+        run: |
+          npm install -g npm@^11.5.1
+          npm --version
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
