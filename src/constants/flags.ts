@@ -88,13 +88,6 @@ export const globalFlags = {
       return target.type === 'file' ? target.path : undefined
     },
   }),
-  fallbackFile: createFlagConfig<string | undefined>({
-    flag: Flags.string({
-      description:
-        'Path (relative to the deploy folder) served for routes the manifest does not list. Defaults to 404.html when present.',
-      required: false,
-    }),
-  }),
   deployFolder: createFlagConfig<string>({
     flag: Flags.string({
       char: 'd',
@@ -114,6 +107,13 @@ export const globalFlags = {
       const target = await promptDeployTarget()
       return target.type === 'folder' ? target.path : './dist'
     },
+  }),
+  fallbackFile: createFlagConfig<string | undefined>({
+    flag: Flags.string({
+      description:
+        'Path (relative to the deploy folder) served for routes the manifest does not list. Defaults to 404.html when present.',
+      required: false,
+    }),
   }),
   // Advanced payment settings
   maxTokenAmount: createFlagConfig<string | undefined>({
