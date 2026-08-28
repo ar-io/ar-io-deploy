@@ -27,13 +27,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # @semantic-release/git pushes the `chore(release)` commit straight to
-          # main, which the `two-stage` ruleset otherwise requires a PR for.
-          # The GitHub Actions app (id 15368) is a bypass actor on that ruleset,
-          # so the built-in token is sufficient — matching turbo-sdk, which runs
-          # the same release with the plain GITHUB_TOKEN. No PAT to expire.
-          # A push made with this token does not re-trigger workflows, and the
-          # release commit carries [skip ci] regardless.
+          # semantic-release pushes only the version tag, and the `two-stage`
+          # ruleset covers refs/heads/main, not refs/tags — so the built-in
+          # token is enough and no personal credential is involved. Nothing
+          # here writes to main: @semantic-release/git was removed precisely
+          # because the Actions app cannot be granted a ruleset bypass
+          # ("must be part of the ruleset source or owner organization").
           token: ${{ github.token }}
           fetch-depth: 0
           fetch-tags: true

@@ -1,3 +1,10 @@
+# Changelog
+
+Release notes for 1.0.2 onward are published on the
+[Releases page](https://github.com/ar-io/ar-io-deploy/releases), generated from
+the same Conventional Commits that drive the version bump. The entries below are
+the historical record through 1.0.1, when the changelog was committed in-repo.
+
 ## [1.0.1](https://github.com/ar-io/ar-io-deploy/compare/v1.0.0...v1.0.1) (2026-07-20)
 
 
