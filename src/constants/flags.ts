@@ -88,6 +88,13 @@ export const globalFlags = {
       return target.type === 'file' ? target.path : undefined
     },
   }),
+  fallbackFile: createFlagConfig<string | undefined>({
+    flag: Flags.string({
+      description:
+        'Path (relative to the deploy folder) served for routes the manifest does not list. Defaults to 404.html when present.',
+      required: false,
+    }),
+  }),
   deployFolder: createFlagConfig<string>({
     flag: Flags.string({
       char: 'd',
@@ -230,6 +237,7 @@ export const deployFlags = {
   'dedupe-cache-max-entries': globalFlags.dedupeCacheMaxEntries.flag,
   'deploy-file': globalFlags.deployFile.flag,
   'deploy-folder': globalFlags.deployFolder.flag,
+  'fallback-file': globalFlags.fallbackFile.flag,
   'max-token-amount': globalFlags.maxTokenAmount.flag,
   'no-dedupe': globalFlags.noDedupe.flag,
   'on-demand': globalFlags.onDemand.flag,
@@ -276,6 +284,7 @@ export interface DeployConfig {
   'dedupe-cache-max-entries': number
   'deploy-file'?: string
   'deploy-folder': string
+  'fallback-file'?: string
   'max-token-amount'?: string
   'no-dedupe': boolean
   'on-demand'?: string
@@ -301,6 +310,7 @@ export const deployFlagConfigs = {
   'dedupe-cache-max-entries': globalFlags.dedupeCacheMaxEntries,
   'deploy-file': globalFlags.deployFile,
   'deploy-folder': globalFlags.deployFolder,
+  'fallback-file': globalFlags.fallbackFile,
   'max-token-amount': globalFlags.maxTokenAmount,
   'no-dedupe': globalFlags.noDedupe,
   'on-demand': globalFlags.onDemand,
@@ -321,6 +331,7 @@ export const uploadFlagConfigs = {
   'dedupe-cache-max-entries': globalFlags.dedupeCacheMaxEntries,
   'deploy-file': globalFlags.deployFile,
   'deploy-folder': globalFlags.deployFolder,
+  'fallback-file': globalFlags.fallbackFile,
   'max-token-amount': globalFlags.maxTokenAmount,
   'no-dedupe': globalFlags.noDedupe,
   'on-demand': globalFlags.onDemand,

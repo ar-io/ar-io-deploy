@@ -22,6 +22,8 @@ export interface UploadWorkflowConfig {
   'dedupe-cache-max-entries': number
   'deploy-file'?: string
   'deploy-folder': string
+  /** Relative path served for routes the manifest does not list. */
+  'fallback-file'?: string
   'max-token-amount'?: string
   'on-demand'?: string
   'sig-type': string
@@ -196,6 +198,7 @@ export async function runUploadWorkflow(
       let cache = config['dedupe-cache-max-entries'] > 0 ? loadCache() : {}
       const uploadResult: FolderUploadResult = await uploadFolder(uploadClient, folderPath, {
         cache,
+        fallbackFile: config['fallback-file'],
         fundingMode,
         throwOnFailure: true,
       })
