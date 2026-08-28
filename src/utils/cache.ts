@@ -69,8 +69,13 @@ export async function hashFile(filePath: string): Promise<string> {
 }
 
 /**
- * Recursively get all files in a directory
- * Returns relative paths from the base directory
+ * Recursively get all files in a directory.
+ *
+ * Returns paths relative to the base directory, always separated by `/`.
+ * `path.relative` yields backslashes on Windows, and these strings become
+ * manifest keys — a gateway looks up `assets/app.js`, so a manifest written
+ * as `assets\app.js` 404s every nested asset. Normalizing here also keeps
+ * the `dir/index.html` directory-index check working on every platform.
  */
 export function getAllFiles(dirPath: string, basePath: string = dirPath): string[] {
   const files: string[] = []
@@ -83,7 +88,7 @@ export function getAllFiles(dirPath: string, basePath: string = dirPath): string
       files.push(...getAllFiles(fullPath, basePath))
     } else {
       // Store relative path for consistent hashing
-      files.push(path.relative(basePath, fullPath))
+      files.push(path.relative(basePath, fullPath).split(path.sep).join('/'))
     }
   }
 

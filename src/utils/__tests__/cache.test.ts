@@ -239,7 +239,7 @@ describe('cache', () => {
       const files = getAllFiles(tempDir)
       expect(files).toHaveLength(2)
       expect(files).toContain('root.txt')
-      expect(files).toContain(path.join('subdir', 'nested.txt'))
+      expect(files).toContain('subdir/nested.txt')
     })
 
     it('should handle deeply nested directories', () => {
@@ -249,7 +249,19 @@ describe('cache', () => {
 
       const files = getAllFiles(tempDir)
       expect(files).toHaveLength(1)
-      expect(files).toContain(path.join('a', 'b', 'c', 'deep.txt'))
+      expect(files).toContain('a/b/c/deep.txt')
+    })
+
+    it('always separates with / so manifest keys are portable', () => {
+      const deepDir = path.join(tempDir, 'assets', 'img')
+      fs.mkdirSync(deepDir, { recursive: true })
+      fs.writeFileSync(path.join(deepDir, 'logo.svg'), '<svg />')
+
+      // These strings become arweave/paths manifest keys verbatim. A gateway
+      // resolves `assets/img/logo.svg`; a backslash key would 404.
+      const files = getAllFiles(tempDir)
+      expect(files).toEqual(['assets/img/logo.svg'])
+      expect(files.every((f) => !f.includes('\\'))).toBe(true)
     })
   })
 })
