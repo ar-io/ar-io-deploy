@@ -21,15 +21,20 @@ jobs:
     needs: build
     permissions:
       contents: write # publish a GitHub release and push the release commit
+      id-token: write # mint the OIDC token npm exchanges for a publish token
       issues: write # comment on released issues
       pull-requests: write # comment on released pull requests
     steps:
       - uses: actions/checkout@v4
         with:
-          # A PAT (or GitHub App token) is required so the release commit/tag can
-          # be pushed past the "changes must be made through a pull request"
-          # branch ruleset. The token's actor must be in the ruleset bypass list.
-          token: ${{ secrets.DEPLOY_PAT || github.token }}
+          # @semantic-release/git pushes the `chore(release)` commit straight to
+          # main, which the `two-stage` ruleset otherwise requires a PR for.
+          # The GitHub Actions app (id 15368) is a bypass actor on that ruleset,
+          # so the built-in token is sufficient — matching turbo-sdk, which runs
+          # the same release with the plain GITHUB_TOKEN. No PAT to expire.
+          # A push made with this token does not re-trigger workflows, and the
+          # release commit carries [skip ci] regardless.
+          token: ${{ github.token }}
           fetch-depth: 0
           fetch-tags: true
 
@@ -51,9 +56,16 @@ jobs:
       - name: Build package
         run: pnpm build
 
+      # @semantic-release/npm prefers npm trusted publishing: it exchanges the
+      # GitHub OIDC token above for a short-lived registry token, so no
+      # long-lived npm credential is involved and the release carries a
+      # provenance attestation. NODE_AUTH_TOKEN stays as the fallback — the
+      # plugin only reaches for it when the OIDC exchange does not succeed, so
+      # this is safe before the trusted publisher is registered on npmjs.com
+      # and becomes dead weight once it is.
       - name: Release
         env:
-          GITHUB_TOKEN: ${{ secrets.DEPLOY_PAT || github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           HUSKY: '0'
         run: pnpm semantic-release
