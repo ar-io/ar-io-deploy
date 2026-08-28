@@ -33,7 +33,11 @@ function idFor(index: number): string {
  * Records every upload and exposes the manifest, which is the last file sent
  * and the only one tagged as a manifest.
  */
-function stubClient(): { client: UploadClient; manifest: () => ArweaveManifest } {
+function stubClient(): {
+  client: UploadClient
+  manifest: () => ArweaveManifest
+  uploadCount: () => number
+} {
   let counter = 0
   let manifestJson: string | undefined
 
@@ -61,6 +65,7 @@ function stubClient(): { client: UploadClient; manifest: () => ArweaveManifest }
       if (!manifestJson) throw new Error('no manifest was uploaded')
       return JSON.parse(manifestJson) as ArweaveManifest
     },
+    uploadCount: () => counter,
   }
 }
 
@@ -135,6 +140,18 @@ describe('uploadFolder manifest fallback', () => {
     await uploadFolder(client, folder, { fallbackFile: 'index.html' })
 
     expect(manifest().fallback?.id).toBe(manifest().paths['index.html'].id)
+  })
+
+  it('rejects a missing fallback before uploading, so a typo costs nothing', async () => {
+    write('index.html', '<html>index</html>')
+    write('assets/app.js', 'console.log(1)')
+
+    const { client, uploadCount } = stubClient()
+
+    // Every file is paid for on upload. Validating after the fact would bill
+    // the whole deploy for a mistyped flag and then throw.
+    await expect(uploadFolder(client, folder, { fallbackFile: 'missing.html' })).rejects.toThrow()
+    expect(uploadCount()).toBe(0)
   })
 
   it('fails loudly when the named fallback file is not in the folder', async () => {

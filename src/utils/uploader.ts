@@ -163,6 +163,18 @@ export async function uploadFolder(
     throw new Error('Folder is empty, nothing to upload')
   }
 
+  /*
+   * Validate before uploading anything: every check below this point happens
+   * after files have been paid for, and a mistyped fallback should cost
+   * nothing.
+   */
+  if (options?.fallbackFile !== undefined && !relativePaths.includes(options.fallbackFile)) {
+    throw new Error(
+      `Fallback file not found in folder: ${options.fallbackFile}. ` +
+        `It must be a path relative to the deploy folder, e.g. "404.html".`,
+    )
+  }
+
   // Prepare file tasks with hashes (if caching is enabled)
   const tasks: FileUploadTask[] = await Promise.all(
     relativePaths.map(async (relativePath) => {
@@ -277,13 +289,6 @@ export async function uploadFolder(
    */
   const fallbackPath =
     options?.fallbackFile ?? (relativePaths.includes('404.html') ? '404.html' : undefined)
-
-  if (options?.fallbackFile !== undefined && !relativePaths.includes(options.fallbackFile)) {
-    throw new Error(
-      `Fallback file not found in folder: ${options.fallbackFile}. ` +
-        `It must be a path relative to the deploy folder, e.g. "404.html".`,
-    )
-  }
 
   const fallbackId = fallbackPath ? manifestPaths[fallbackPath]?.id : undefined
 
