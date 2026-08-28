@@ -21,6 +21,7 @@ jobs:
     needs: build
     permissions:
       contents: write # publish a GitHub release and push the release commit
+      id-token: write # mint the OIDC token npm exchanges for a publish token
       issues: write # comment on released issues
       pull-requests: write # comment on released pull requests
     steps:
@@ -51,6 +52,13 @@ jobs:
       - name: Build package
         run: pnpm build
 
+      # @semantic-release/npm prefers npm trusted publishing: it exchanges the
+      # GitHub OIDC token above for a short-lived registry token, so no
+      # long-lived npm credential is involved and the release carries a
+      # provenance attestation. NODE_AUTH_TOKEN stays as the fallback — the
+      # plugin only reaches for it when the OIDC exchange does not succeed, so
+      # this is safe before the trusted publisher is registered on npmjs.com
+      # and becomes dead weight once it is.
       - name: Release
         env:
           GITHUB_TOKEN: ${{ secrets.DEPLOY_PAT || github.token }}
