@@ -72,6 +72,7 @@ export default class Upload extends Command {
         'dedupe-cache-max-entries': effectiveCacheMaxEntries,
         'deploy-file': baseConfig['deploy-file'],
         'deploy-folder': baseConfig['deploy-folder'],
+        'fallback-file': baseConfig['fallback-file'],
         'max-token-amount': baseConfig['max-token-amount'],
         'on-demand': baseConfig['on-demand'],
         'sig-type': baseConfig['sig-type'],

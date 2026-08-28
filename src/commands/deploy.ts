@@ -155,6 +155,7 @@ export default class Deploy extends Command {
         'dedupe-cache-max-entries': effectiveCacheMaxEntries,
         'deploy-file': baseConfig['deploy-file'],
         'deploy-folder': baseConfig['deploy-folder'],
+        'fallback-file': baseConfig['fallback-file'],
         'max-token-amount': advancedOptions?.maxTokenAmount || baseConfig['max-token-amount'],
         'no-dedupe': baseConfig['no-dedupe'],
         'on-demand': advancedOptions?.onDemand || baseConfig['on-demand'],

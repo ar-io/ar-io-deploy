@@ -143,6 +143,12 @@ export async function uploadFolder(
   options?: {
     cache?: TransactionCache
     concurrency?: number
+    /**
+     * Path, relative to the folder, whose transaction becomes the manifest's
+     * `fallback` — what a gateway serves for a path the manifest does not
+     * list. Defaults to `404.html` when present.
+     */
+    fallbackFile?: string
     fundingMode?: OnDemandFunding
     throwOnFailure?: boolean
   },
@@ -155,6 +161,18 @@ export async function uploadFolder(
 
   if (relativePaths.length === 0) {
     throw new Error('Folder is empty, nothing to upload')
+  }
+
+  /*
+   * Validate before uploading anything: every check below this point happens
+   * after files have been paid for, and a mistyped fallback should cost
+   * nothing.
+   */
+  if (options?.fallbackFile !== undefined && !relativePaths.includes(options.fallbackFile)) {
+    throw new Error(
+      `Fallback file not found in folder: ${options.fallbackFile}. ` +
+        `It must be a path relative to the deploy folder, e.g. "404.html".`,
+    )
   }
 
   // Prepare file tasks with hashes (if caching is enabled)
@@ -256,11 +274,30 @@ export async function uploadFolder(
   // Determine the index path (root index.html)
   const indexPath = relativePaths.includes('index.html') ? 'index.html' : undefined
 
+  /*
+   * Determine the fallback — the transaction a gateway serves for any path the
+   * manifest does not list.
+   *
+   * Without one, an `arweave/paths` manifest 404s every route that is not a
+   * real file, which breaks deep links into any single-page app: the root
+   * loads and `/settings` does not. An explicit `fallbackFile` wins; otherwise
+   * `404.html` is used when the build emits one, matching the convention
+   * static hosts already use.
+   *
+   * Note the shape: `fallback` takes an `{ id }`, not the `{ path }` that
+   * `index` takes. The v0.2.0 spec differs between the two.
+   */
+  const fallbackPath =
+    options?.fallbackFile ?? (relativePaths.includes('404.html') ? '404.html' : undefined)
+
+  const fallbackId = fallbackPath ? manifestPaths[fallbackPath]?.id : undefined
+
   // Build the manifest
   const manifest = {
     manifest: 'arweave/paths',
     version: '0.2.0',
     ...(indexPath && { index: { path: indexPath } }),
+    ...(fallbackId && { fallback: { id: fallbackId } }),
     paths: manifestPaths,
   }
 
