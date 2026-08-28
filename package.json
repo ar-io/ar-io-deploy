@@ -62,8 +62,6 @@
     "@commitlint/config-conventional": "^19.6.0",
     "@oclif/prettier-config": "^0.2.1",
     "@oclif/test": "^4.1.14",
-    "@semantic-release/changelog": "^6.0.3",
-    "@semantic-release/git": "^10.0.1",
     "@semantic-release/npm": "^13.1.1",
     "@types/mime-types": "^2.1.4",
     "@types/node": "^22.10.2",
