@@ -27,10 +27,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # A PAT (or GitHub App token) is required so the release commit/tag can
-          # be pushed past the "changes must be made through a pull request"
-          # branch ruleset. The token's actor must be in the ruleset bypass list.
-          token: ${{ secrets.DEPLOY_PAT || github.token }}
+          # @semantic-release/git pushes the `chore(release)` commit straight to
+          # main, which the `two-stage` ruleset otherwise requires a PR for.
+          # The GitHub Actions app (id 15368) is a bypass actor on that ruleset,
+          # so the built-in token is sufficient — matching turbo-sdk, which runs
+          # the same release with the plain GITHUB_TOKEN. No PAT to expire.
+          # A push made with this token does not re-trigger workflows, and the
+          # release commit carries [skip ci] regardless.
+          token: ${{ github.token }}
           fetch-depth: 0
           fetch-tags: true
 
@@ -61,7 +65,7 @@ jobs:
       # and becomes dead weight once it is.
       - name: Release
         env:
-          GITHUB_TOKEN: ${{ secrets.DEPLOY_PAT || github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           HUSKY: '0'
         run: pnpm semantic-release
