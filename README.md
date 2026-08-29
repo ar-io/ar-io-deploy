@@ -1,6 +1,8 @@
 # ARIO Deploy
 
-`ario-deploy` is a Node.js command-line tool designed to streamline the deployment of web applications to the permaweb using Arweave. It uploads your build folder or a single file, creates Arweave manifests, and can optionally update ArNS (Ar.io Name System) records via ANT (Ar.io Name Token) with the transaction ID.
+Deploy any folder to Arweave and point an ArNS name at it. One command, permanent hosting.
+
+`ario-deploy` uploads a build folder (or a single file), writes an Arweave path manifest, and optionally updates an ArNS (Ar.io Name System) record via its ANT (Ar.io Name Token) so the name resolves to the new upload. Available as a CLI and as a [GitHub Action](#github-action).
 
 ## Quick Start
 
@@ -167,6 +169,45 @@ Deploy a single file:
 ario-deploy deploy --wallet ./wallet.json --deploy-file ./path/to/file.txt
 ```
 
+`--deploy-file` overrides `--deploy-folder`, and the file is uploaded as one
+transaction with **no manifest** — an ArNS name pointed at it resolves straight
+to that file, served with its own content type. Useful for a PDF, a dataset, or
+a single page. Manifest-only options such as `--fallback-file` do not apply.
+
+### Single-page apps
+
+An Arweave path manifest maps each path to a transaction, and a gateway returns
+404 for any path the manifest does not list. That is correct for static files
+but wrong for a single-page app, whose routes are not files — `/settings` is
+invented by the router and exists nowhere on disk. Without a fallback the root
+loads and every deep link 404s.
+
+Manifests have a `fallback` for exactly this, and `ario-deploy` sets it
+automatically when the build emits a `404.html`:
+
+```bash
+ario-deploy deploy --deploy-folder ./dist
+```
+
+Most SPA builds do not emit one. Either copy your entry point before deploying:
+
+```bash
+cp dist/index.html dist/404.html
+```
+
+…or name the fallback directly:
+
+```bash
+ario-deploy deploy --deploy-folder ./dist --fallback-file index.html
+```
+
+The file must exist in the deploy folder; a path that is not there fails before
+anything is uploaded, so a typo costs nothing.
+
+> Deep links can appear broken for up to a minute after a redeploy while
+> gateways serve cached 404s from the previous manifest. Confirm with a
+> cache-busting query string (`/settings?x=1`) before assuming the deploy failed.
+
 ### Upload/deploy without ArNS
 
 `deploy` uploads without updating ArNS by default. You can also use the `upload` command explicitly for the same Turbo upload, dedupe cache, and payment options as deploy, minus ArNS flags:
@@ -278,7 +319,8 @@ ario-deploy upload --wallet ./wallet.json --deploy-folder ./dist --uploader http
 - `--cluster, -p`: Solana cluster for ArNS updates. Choices: `mainnet`, `devnet`. Default: `mainnet`
 - `--rpc-url`: Optional Solana RPC URL override for ArNS updates
 - `--deploy-folder, -d`: Folder to deploy. Default: `./dist`
-- `--deploy-file, -f`: Deploy a single file instead of a folder
+- `--deploy-file, -f`: Deploy a single file instead of a folder (no manifest is created)
+- `--fallback-file`: Path, relative to the deploy folder, served for routes the manifest does not list. Defaults to `404.html` when the build emits one. See [Single-page apps](#single-page-apps).
 - `--undername, -u`: ANT undername to update. Default: `@`
 - `--ttl-seconds, -t`: TTL in seconds for the ANT record (60-86400). Default: `60`
 
@@ -673,7 +715,6 @@ ar-io-deploy/
 ├── bin/                 # Executable scripts
 │   ├── run.js
 │   └── dev.js
-├── .changeset/          # Changesets configuration
 ├── .husky/              # Git hooks
 └── dist/                # Build output
 ```
@@ -697,6 +738,9 @@ ar-io-deploy/
 - **Upload timeouts:** Files have a timeout for upload. Large files may fail and require optimization
 - **Insufficient Turbo Credits:** Use `--on-demand` with `--max-token-amount` to automatically fund uploads when balance is low
 - **On-demand payment fails:** Ensure your wallet has sufficient tokens (ARIO or Base-ETH) and the token type matches your signer (`ario` with Arweave, `base-eth` with Ethereum)
+- **Deep links 404 but the homepage loads:** The manifest has no `fallback`. Emit a `404.html` or pass `--fallback-file index.html` — see [Single-page apps](#single-page-apps)
+- **Deep links still 404 right after a redeploy:** Gateways cache the previous manifest's 404s for around a minute. Retry with a cache-busting query string before assuming the deploy failed
+- **Error: "Fallback file not found in folder":** `--fallback-file` takes a path relative to the deploy folder, e.g. `index.html`, not `./dist/index.html`
 
 ## Contributing
 
@@ -706,9 +750,8 @@ Contributions are welcome! Please follow these guidelines:
 2. Create a feature branch
 3. Make your changes
 4. Run tests and linter: `pnpm test && pnpm lint`
-5. Create a changeset: `pnpm changeset`
-6. Commit your changes using conventional commits
-7. Push and create a pull request
+5. Commit your changes using conventional commits — the commit type determines the next release, so `fix:` for a bug and `feat:` for a feature
+6. Push and create a pull request
 
 ### Conventional Commits
 
@@ -722,15 +765,18 @@ body (optional)
 
 Types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert`
 
-### Changesets
+### Releases
 
-We use [changesets](https://github.com/changesets/changesets) for version management. When making changes:
+Releases are automated. Merging to `main` runs
+[semantic-release](https://semantic-release.gitbook.io/), which derives the next
+version from the Conventional Commits since the last tag, publishes to npm, and
+creates the GitHub Release whose notes serve as the changelog. `fix:` yields a
+patch, `feat:` a minor, `BREAKING CHANGE:` a major; `chore:`, `docs:`, `ci:` and
+`style:` release nothing.
 
-```bash
-pnpm changeset
-```
-
-Follow the prompts to describe your changes.
+Publishing uses [npm trusted publishing](https://docs.npmjs.com/trusted-publishers)
+over GitHub OIDC, so no npm token is stored and every release carries a
+provenance attestation. There are no credentials to rotate.
 
 ## Dependencies
 
