@@ -87,6 +87,12 @@ runs:
       uses: actions/setup-node@v5
       with:
         node-version: '22'
+        # setup-node@v5 auto-caches when the repo's package.json declares a
+        # `packageManager`, and fails the run if the matching lockfile is
+        # absent. This action only needs a Node runtime to install its own
+        # CLI — it has no business touching the caller's dependency cache,
+        # and guessing wrong breaks their deploy.
+        package-manager-cache: false
 
     # Pinned to the major this action tag represents. Unpinned, `@v1` would
     # silently install a future 2.x mid-deploy for every consumer — the exact
