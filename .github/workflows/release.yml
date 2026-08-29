@@ -66,16 +66,14 @@ jobs:
       - name: Build package
         run: pnpm build
 
-      # @semantic-release/npm prefers npm trusted publishing: it exchanges the
-      # GitHub OIDC token above for a short-lived registry token, so no
-      # long-lived npm credential is involved and the release carries a
-      # provenance attestation. NODE_AUTH_TOKEN stays as the fallback — the
-      # plugin only reaches for it when the OIDC exchange does not succeed, so
-      # this is safe before the trusted publisher is registered on npmjs.com
-      # and becomes dead weight once it is.
+      # Publishing goes over npm trusted publishing: npm exchanges the GitHub
+      # OIDC token above for a short-lived registry token, so the release
+      # carries a provenance attestation and no long-lived npm credential
+      # exists to expire. The NPM_TOKEN fallback was removed once a release
+      # succeeded over OIDC — a stale token that cannot be verified is worse
+      # than no fallback, because it reads as one.
       - name: Release
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           HUSKY: '0'
         run: pnpm semantic-release
