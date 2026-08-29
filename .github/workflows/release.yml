@@ -25,7 +25,7 @@ jobs:
       issues: write # comment on released issues
       pull-requests: write # comment on released pull requests
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           # semantic-release pushes only the version tag, and the `two-stage`
           # ruleset covers refs/heads/main, not refs/tags — so the built-in
@@ -38,12 +38,12 @@ jobs:
           fetch-tags: true
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v5
         with:
           version: 10
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: '22'
           registry-url: https://registry.npmjs.org

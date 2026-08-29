@@ -84,18 +84,21 @@ runs:
   using: 'composite'
   steps:
     - name: Setup Node.js
-      uses: actions/setup-node@v4
+      uses: actions/setup-node@v5
       with:
-        node-version: '20'
+        node-version: '22'
 
+    # Pinned to the major this action tag represents. Unpinned, `@v1` would
+    # silently install a future 2.x mid-deploy for every consumer — the exact
+    # thing a major tag is supposed to prevent.
     - name: Install ario-deploy
       shell: bash
-      run: npm install -g @ar.io/deploy
+      run: npm install -g @ar.io/deploy@^1
 
     - name: Restore transaction cache
       id: cache-restore
       if: inputs.no-dedupe != 'true'
-      uses: actions/cache/restore@v4
+      uses: actions/cache/restore@v5
       with:
         path: .ario-deploy/transaction-cache.json
         key: ario-deploy-transaction-cache
@@ -244,7 +247,7 @@ runs:
 
     - name: Save transaction cache
       if: inputs.no-dedupe != 'true' && always()
-      uses: actions/cache/save@v4
+      uses: actions/cache/save@v5
       continue-on-error: true
       with:
         path: .ario-deploy/transaction-cache.json
