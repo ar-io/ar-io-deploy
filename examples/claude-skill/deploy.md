@@ -56,6 +56,10 @@ Or use `--wallet <path>` and `--arns-wallet <path>` to point to key files.
 
 This skill uses `@ar.io/deploy` to upload your built app to Arweave permanently.
 
+`--deploy-folder` uploads a folder and writes a manifest. `--deploy-file`
+uploads a single file with **no manifest**, so manifest options such as
+`--fallback-file` do not apply to it.
+
 ### Quick Deploy (Upload Only)
 
 ```bash
@@ -65,6 +69,41 @@ npm run build
 # Deploy (uses DEPLOY_KEY env var or prompts interactively)
 npx @ar.io/deploy deploy --deploy-folder ./dist
 ```
+
+### Single-page apps: set a fallback
+
+**Check this before deploying any app with client-side routing** (React Router,
+Vue Router, SvelteKit SPA mode, Next static export). It is the most common way
+an ar.io deploy looks broken.
+
+A path manifest 404s any path it does not list. An SPA's routes are not files —
+`/settings` exists only in the router — so without a fallback the homepage loads
+and every deep link 404s.
+
+`ario-deploy` sets the fallback automatically **if the build emits `404.html`**.
+Most do not. So either:
+
+```bash
+# Option A — give the build a 404.html (auto-detected)
+npm run build && cp dist/index.html dist/404.html
+npx @ar.io/deploy deploy --deploy-folder ./dist
+
+# Option B — name the fallback explicitly
+npx @ar.io/deploy deploy --deploy-folder ./dist --fallback-file index.html
+```
+
+Skip this only for a genuinely static site where every URL is a real file.
+
+**After deploying, verify a deep link, not just the homepage** — the homepage
+works either way, so it proves nothing:
+
+```bash
+curl -o /dev/null -w '%{http_code}\n' https://YOUR_NAME.ar.io/some/route
+```
+
+Expect `200`. If you get `404` within a minute of deploying, gateways may still
+be serving cached 404s from the previous manifest — retry with a cache-busting
+query string (`?x=1`) before concluding the deploy failed.
 
 ### Deploy with ArNS Name
 
