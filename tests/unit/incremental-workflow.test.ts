@@ -1,3 +1,4 @@
+import crypto from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -101,6 +102,41 @@ function everyHashUnderEveryType(request: GraphQlRequest): unknown[] {
   }
 
   return edges
+}
+
+/**
+ * Build a gateway responder that knows about every file in `dir` except those
+ * whose contents appear in `except` — a previous deploy, minus what changed.
+ */
+function everyHashUnderEveryTypeIn(
+  dir: string,
+  except: Buffer[] = [],
+): (request: GraphQlRequest) => unknown[] {
+  const excluded = new Set(
+    except.map((body) => crypto.createHash('sha256').update(body).digest('hex')),
+  )
+
+  return (request: GraphQlRequest) => {
+    const edges: unknown[] = []
+    for (const [i, hash] of request.variables.hashes.entries()) {
+      if (excluded.has(hash)) continue
+      for (const [j, contentType] of ['text/html', 'text/javascript', 'text/plain'].entries()) {
+        edges.push({
+          cursor: `k${i}-${j}`,
+          node: {
+            id: `rr${String(i * 3 + j).padStart(41, '0')}`,
+            owner: { address: OWNER },
+            tags: [
+              { name: FILE_HASH_TAG, value: hash },
+              { name: 'Content-Type', value: contentType },
+            ],
+          },
+        })
+      }
+    }
+
+    return edges
+  }
 }
 
 function readCache(): TransactionCache {
@@ -276,6 +312,75 @@ function uploadArgs(extra: string[]): string[] {
     ...extra,
   ]
 }
+
+/** Bytes each quote asked about, so the pre-flight can be pinned. */
+function capturePriceRequests(): string[] {
+  const seen: string[] = []
+  server.use(
+    http.get('https://payment.ardrive.io/v1/price/bytes/:byteCount', ({ params }) => {
+      seen.push(String(params.byteCount))
+      return HttpResponse.json({ adjustments: [], winc: '100000000' })
+    }),
+  )
+  return seen
+}
+
+/** Six distinct 60 KB chunks: the folder and any pair clear the free tier. */
+function writeBigFolder(): void {
+  for (let i = 0; i < 6; i++) {
+    fs.writeFileSync(path.join(folder, `chunk-${i}.txt`), String(i).repeat(60_000))
+  }
+}
+
+describe('the credits pre-flight prices what will actually be sent', () => {
+  it('does not quote the whole bundle when nothing changed', async () => {
+    writeBigFolder()
+    const quoted = capturePriceRequests()
+    const seen: GraphQlRequest[] = []
+    server.use(graphqlHandler(seen, everyHashUnderEveryTypeIn(folder)), uploadHandler())
+
+    await runUploadWorkflow(DEPLOY_KEY, config(), io)
+
+    /*
+     * The headline promise is that a redeploy pays only for what changed.
+     * Pricing the folder would refuse exactly that deploy for want of credits
+     * for the whole bundle, and the first user to hit it concludes the flag
+     * does not work.
+     */
+    expect(quoted).toEqual([])
+  })
+
+  it('still quotes the whole folder without --incremental', async () => {
+    writeBigFolder()
+    const quoted = capturePriceRequests()
+    server.use(uploadHandler())
+
+    await runUploadWorkflow(DEPLOY_KEY, config({ incremental: false }), io)
+
+    // Unchanged behaviour for anyone who did not opt in.
+    expect(quoted).toHaveLength(1)
+    expect(Number(quoted[0])).toBeGreaterThan(350_000)
+  })
+
+  it('quotes only the chunks that changed, not the folder', async () => {
+    writeBigFolder()
+    const quoted = capturePriceRequests()
+    const seen: GraphQlRequest[] = []
+
+    // Everything resolves except two chunks: a real redeploy after a rebuild.
+    const changed = [
+      fs.readFileSync(path.join(folder, 'chunk-0.txt')),
+      fs.readFileSync(path.join(folder, 'chunk-1.txt')),
+    ]
+    server.use(graphqlHandler(seen, everyHashUnderEveryTypeIn(folder, changed)), uploadHandler())
+
+    await runUploadWorkflow(DEPLOY_KEY, config(), io)
+
+    expect(quoted).toHaveLength(1)
+    // Two 60,000-byte chunks, not the ~360 KB folder.
+    expect(Number(quoted[0])).toBe(120_000)
+  })
+})
 
 describe('--incremental and turning dedupe off', () => {
   it('refuses --incremental --no-dedupe', async () => {

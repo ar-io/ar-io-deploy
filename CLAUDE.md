@@ -47,13 +47,14 @@ Located at `.ario-deploy/transaction-cache.json` (relative to cwd). Maps SHA-256
 
 ### Incremental Uploads (`--incremental`, opt-in)
 
-`src/utils/incremental.ts` adds the two things the local cache cannot do: a `File-SHA256` tag on every uploaded file, and a chain-backed index (`createChainIndex`) that rebuilds the hash -> transaction id map by querying the uploader's own past items over GraphQL. That index is what makes a fresh CI checkout cheap. Ids reach disk during the run, coalesced onto a short interval, not only at the end.
+`src/utils/incremental.ts` adds the two things the local cache cannot do: a `File-SHA256` tag on every uploaded file, and a chain-backed index (`createChainIndex`) that rebuilds the hash -> transaction id map by querying the uploader's own past items over GraphQL. That index is what makes a fresh CI checkout cheap. Ids reach disk during the run — `createCacheWriter` writes on the leading edge, then coalesces onto a 500 ms **trailing** timer (unref'd) and flushes on `SIGINT`/`SIGTERM`, because a leading edge alone is a throttle that strands a whole concurrent batch, and Ctrl-C runs no `finally`. Call `dispose()` or the signal handlers leak.
 
 Three things are load-bearing and easy to break:
 
 - **Deploy-invariant file tags.** A data item's id covers its tags, so any per-deploy tag on a file (the commit SHA above all) moves every id and silently doubles the bill. `incrementalFileTags()` stamps only `App-Name`, `Content-Type` and `File-SHA256`, guarded by `assertDeployInvariantTags`; `GIT-HASH` goes on the manifest instead.
 - **The owner address.** GraphQL `owners` matches `base64url(sha256(publicKey))`, never `signer.getNativeAddress()` — that returns base58 for Solana, `0x…` for Ethereum/Polygon and `kyve1…` for KYVE, and a gateway answers those with HTTP 200 and zero edges. Use `ownerAddressFromPublicKey()`; `assertOwnerAddress()` refuses anything else rather than querying with a value that can only ever match nothing.
-- **Content type in the key.** Reuse is keyed `<sha256>|<mime-type>` (`incrementalCacheKey`). Hash alone would serve byte-identical `a.json` and `b.txt` under one `Content-Type`. Non-incremental runs keep the historic bare-hash key.
+- **Content type in the key.** Reuse is keyed `<sha256>|<mime-type>` (`incrementalCacheKey`). Hash alone would serve byte-identical `a.json` and `b.txt` under one `Content-Type`. Non-incremental runs keep the historic bare-hash key, so a project that toggles the flag stores both against the same LRU cap.
+- **Pricing follows the plan, not the folder.** `planFolderUpload` is split out of `uploadFolder` so `runUploadWorkflow` can quote `plan.pendingBytes`. Quoting `getFolderSize` would refuse the two-chunk redeploy this flag exists to make cheap. Non-incremental still quotes the folder.
 
 ### Signer Types
 

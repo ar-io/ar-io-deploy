@@ -270,6 +270,57 @@ describe('incremental folder uploads', () => {
   })
 })
 
+describe('incremental failure handling', () => {
+  it('lets every in-flight upload settle before the failure propagates', async () => {
+    write('ok-1.txt', 'one')
+    write('ok-2.txt', 'two')
+    write('ok-3.txt', 'three')
+    write('boom.txt', 'four')
+
+    const recorded: number[] = []
+    let counter = 0
+
+    const client: UploadClient = {
+      async uploadFile(args: UploadFileArgs) {
+        const file = typeof args.file === 'string' ? args.file : ''
+        if (file.endsWith('boom.txt')) {
+          throw new Error('upload service said no')
+        }
+
+        // The others are still in flight when the failure happens.
+        await new Promise((resolve) => {
+          setTimeout(resolve, 5)
+        })
+        counter += 1
+        return { id: idFor(counter) }
+      },
+    }
+
+    let recordedAtRejection = -1
+    await uploadFolder(client, folder, {
+      cache: {},
+      incremental: {
+        onCacheUpdate: (cache) => recorded.push(Object.keys(cache).length),
+      },
+      throwOnFailure: true,
+    }).then(
+      () => {
+        throw new Error('expected the upload to fail')
+      },
+      () => {
+        recordedAtRejection = recorded.length
+      },
+    )
+
+    /*
+     * Promise.all would reject on `boom.txt` while the other three were still
+     * running, and their ids would then be recorded into a cache the caller
+     * had already flushed and abandoned — paid for and thrown away.
+     */
+    expect(recordedAtRejection).toBe(3)
+  })
+})
+
 describe('incremental content-type safety', () => {
   it('does not collapse identical bytes served under different types', async () => {
     // A gateway serves whatever Content-Type the data item carries, so reusing

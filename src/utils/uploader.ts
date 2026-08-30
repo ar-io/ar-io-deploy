@@ -1,3 +1,4 @@
+import fs from 'node:fs'
 import path from 'node:path'
 import { Readable } from 'node:stream'
 
@@ -172,7 +173,9 @@ export async function uploadFile(
 /** Default concurrency for parallel file uploads */
 const DEFAULT_UPLOAD_CONCURRENCY = 10
 
-interface FileUploadTask {
+export interface FileUploadTask {
+  /** File size, so a plan can be priced before anything is signed. */
+  bytes: number
   cached?: { transactionId: string }
   /**
    * Key this file is remembered under: the bare hash outside incremental mode
@@ -187,40 +190,44 @@ interface FileUploadTask {
   relativePath: string
 }
 
+/** Everything decided about a folder upload before any of it is paid for. */
+export interface FolderUploadPlan {
+  cache: TransactionCache
+  cacheHits: number
+  /**
+   * Bytes that will actually be uploaded.
+   *
+   * The whole point of the feature: a caller can price this instead of the
+   * folder, so a redeploy of two changed chunks is not refused for want of
+   * credits for the entire bundle.
+   */
+  pendingBytes: number
+  relativePaths: string[]
+  tasks: FileUploadTask[]
+  uncachedTasks: FileUploadTask[]
+  uploadTargets: FileUploadTask[]
+}
+
 /**
- * Upload a folder with per-file deduplication.
- * Each file is checked against the cache individually, and only uncached files are uploaded.
- * A manifest is then constructed and uploaded to create the folder structure.
+ * Work out what a folder upload would do, without doing any of it.
  *
- * @param turbo - Upload client used for file and manifest uploads.
+ * Hashes the folder, resolves what is already on Arweave, and reports what is
+ * left. Split out of `uploadFolder` so the cost of a deploy can be quoted from
+ * the files that will really be sent; `uploadFolder` calls it itself when no
+ * plan is handed in, so the behaviour is identical either way.
+ *
  * @param folderPath - Folder to upload.
- * @param options - Upload options for caching, concurrency, funding, and failure handling.
- * @returns Folder upload result including manifest transaction ID and cache stats.
+ * @param options - Cache, fallback validation and incremental options.
+ * @returns The plan, including the cache enriched with anything recovered.
  */
-export async function uploadFolder(
-  turbo: UploadClient,
+export async function planFolderUpload(
   folderPath: string,
   options?: {
     cache?: TransactionCache
-    concurrency?: number
-    /**
-     * Path, relative to the folder, whose transaction becomes the manifest's
-     * `fallback` — what a gateway serves for a path the manifest does not
-     * list. Defaults to `404.html` when present.
-     */
     fallbackFile?: string
-    fundingMode?: OnDemandFunding
-    /**
-     * Opt in to content-hash incremental uploads: publish each file's hash as
-     * a tag, recover ids the local cache is missing from the chain, and
-     * persist every id the instant it lands. Omitted, the folder uploads
-     * exactly as it always has.
-     */
     incremental?: IncrementalOptions
-    throwOnFailure?: boolean
   },
-): Promise<FolderUploadResult> {
-  const concurrency = options?.concurrency ?? DEFAULT_UPLOAD_CONCURRENCY
+): Promise<FolderUploadPlan> {
   const useCache = options?.cache !== undefined
   const incremental = options?.incremental
 
@@ -255,7 +262,14 @@ export async function uploadFolder(
       const hash = needHashes ? await hashFile(fullPath) : ''
       const contentType = mime.lookup(fullPath) || 'application/octet-stream'
       const cacheKey = hash && incremental ? incrementalCacheKey(hash, contentType) : hash
-      return { cacheKey, contentType, fullPath, hash, relativePath }
+      return {
+        bytes: fs.statSync(fullPath).size,
+        cacheKey,
+        contentType,
+        fullPath,
+        hash,
+        relativePath,
+      }
     }),
   )
 
@@ -325,10 +339,74 @@ export async function uploadFolder(
    */
   const uploadTargets = incremental ? dedupeTasksByCacheKey(uncachedTasks) : uncachedTasks
 
+  return {
+    cache,
+    cacheHits,
+    pendingBytes: uploadTargets.reduce((total, task) => total + task.bytes, 0),
+    relativePaths,
+    tasks,
+    uncachedTasks,
+    uploadTargets,
+  }
+}
+
+/**
+ * Upload a folder with per-file deduplication.
+ * Each file is checked against the cache individually, and only uncached files are uploaded.
+ * A manifest is then constructed and uploaded to create the folder structure.
+ *
+ * @param turbo - Upload client used for file and manifest uploads.
+ * @param folderPath - Folder to upload.
+ * @param options - Upload options for caching, concurrency, funding, and failure handling.
+ * @returns Folder upload result including manifest transaction ID and cache stats.
+ */
+export async function uploadFolder(
+  turbo: UploadClient,
+  folderPath: string,
+  options?: {
+    cache?: TransactionCache
+    concurrency?: number
+    /**
+     * Path, relative to the folder, whose transaction becomes the manifest's
+     * `fallback` — what a gateway serves for a path the manifest does not
+     * list. Defaults to `404.html` when present.
+     */
+    fallbackFile?: string
+    fundingMode?: OnDemandFunding
+    /**
+     * Opt in to content-hash incremental uploads: publish each file's hash as
+     * a tag, recover ids the local cache is missing from the chain, and
+     * persist every id the instant it lands. Omitted, the folder uploads
+     * exactly as it always has.
+     */
+    incremental?: IncrementalOptions
+    /**
+     * A plan from `planFolderUpload`, when the caller has already made one to
+     * quote the cost. Its cache supersedes `cache`, since it carries anything
+     * the chain lookup recovered. Omitted, one is made here.
+     */
+    plan?: FolderUploadPlan
+    throwOnFailure?: boolean
+  },
+): Promise<FolderUploadResult> {
+  const concurrency = options?.concurrency ?? DEFAULT_UPLOAD_CONCURRENCY
+  const useCache = options?.cache !== undefined
+  const incremental = options?.incremental
+
+  const plan = options?.plan ?? (await planFolderUpload(folderPath, options))
+  const { relativePaths, tasks, uncachedTasks, uploadTargets } = plan
+  let { cache, cacheHits } = plan
+
   // Upload uncached files with concurrency control using p-limit
   const limit = pLimit(concurrency)
 
-  const uploadResults = await Promise.all(
+  /*
+   * allSettled, not all: `Promise.all` rejects on the first failure while the
+   * other workers are still in flight, so their `onCacheUpdate` calls land
+   * after the caller has already flushed and given up — ids paid for and
+   * thrown away. Everything settles first, then the failure propagates.
+   */
+  const settled = await Promise.allSettled(
     uploadTargets.map((task) =>
       limit(async () => {
         const mimeType = task.contentType
@@ -367,6 +445,21 @@ export async function uploadFolder(
       }),
     ),
   )
+
+  const uploadResults = settled.flatMap((outcome) =>
+    outcome.status === 'fulfilled' ? [outcome.value] : [],
+  )
+
+  /*
+   * Unconditionally, not gated on throwOnFailure: Promise.all always
+   * propagated a thrown error, and that flag only ever governed an upload
+   * that came back without an id. Only the timing changes — the failure now
+   * waits for its siblings to finish first.
+   */
+  const rejection = settled.find((outcome) => outcome.status === 'rejected')
+  if (rejection?.status === 'rejected') {
+    throw rejection.reason
+  }
 
   // Update cache with all successful uploads (done sequentially to avoid race conditions)
   if (!incremental) {
