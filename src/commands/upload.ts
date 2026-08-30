@@ -15,6 +15,7 @@ import {
   formatUploadSize,
 } from '../utils/display.js'
 import { expandPath } from '../utils/path.js'
+import { validateIncrementalDedupe } from '../utils/validators.js'
 import { runUploadWorkflow } from '../workflows/upload-workflow.js'
 
 export default class Upload extends Command {
@@ -68,6 +69,19 @@ export default class Upload extends Command {
       const effectiveCacheMaxEntries = baseConfig['no-dedupe']
         ? 0
         : baseConfig['dedupe-cache-max-entries']
+
+      /*
+       * `--no-dedupe` is refused by oclif exclusivity; this catches the other
+       * way of saying the same thing, so both spellings fail identically
+       * instead of one being silently honoured.
+       */
+      const incrementalConflict = validateIncrementalDedupe(
+        baseConfig.incremental,
+        effectiveCacheMaxEntries,
+      )
+      if (incrementalConflict !== true) {
+        this.error(incrementalConflict)
+      }
 
       const uploadCfg = {
         'dedupe-cache-max-entries': effectiveCacheMaxEntries,

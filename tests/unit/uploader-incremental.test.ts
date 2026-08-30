@@ -6,15 +6,18 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { FILE_HASH_TAG } from '../../src/constants/incremental.js'
 import type { TransactionCache } from '../../src/utils/cache.js'
-import type { ChainIndex } from '../../src/utils/incremental.js'
+import type { ChainIndex, FileIdentity } from '../../src/utils/incremental.js'
+import { incrementalCacheKey } from '../../src/utils/incremental.js'
 import type { UploadClient, UploadFileArgs } from '../../src/utils/upload-types.js'
 import { incrementalFileTags, uploadFolder } from '../../src/utils/uploader.js'
 
 /**
  * Arweave storage is permanent, so paying twice for byte-identical files buys
- * nothing. These pin the three things that make a redeploy cheap: the hash tag
- * that keeps a past upload findable, the reuse of ids the run already knows,
- * and the manifest assembled from old and new ids together.
+ * nothing. These pin the things that make a redeploy cheap without making it
+ * wrong: the hash tag that keeps a past upload findable, the reuse of ids the
+ * run already knows, the manifest assembled from old and new ids together, and
+ * the content type that must travel with the hash so reuse cannot serve a file
+ * as something it is not.
  */
 
 interface ArweaveManifest {
@@ -43,7 +46,7 @@ interface Recorded {
  * Records every upload with its tags, and exposes the manifest — the only item
  * sent as a stream and the only one tagged as a manifest.
  */
-function stubClient(address: string | undefined = 'owner-address'): {
+function stubClient(): {
   client: UploadClient
   files: () => Recorded[]
   manifest: () => ArweaveManifest
@@ -55,15 +58,6 @@ function stubClient(address: string | undefined = 'owner-address'): {
   const files: Recorded[] = []
 
   const client: UploadClient = {
-    ...(address === undefined
-      ? {}
-      : {
-          signer: {
-            async getNativeAddress() {
-              return address
-            },
-          },
-        }),
     async uploadFile(args: UploadFileArgs) {
       const tags = args.dataItemOpts?.tags ?? []
       const isManifest = tags.some(
@@ -105,6 +99,28 @@ function write(name: string, body: string): void {
 /** The `File-SHA256` value the run published for a given uploaded file. */
 function hashTags(files: Recorded[]): string[] {
   return files.map((f) => f.tags.find((t) => t.name === FILE_HASH_TAG)?.value ?? '')
+}
+
+/** The `Content-Type` the run published for a given uploaded file. */
+function contentTypes(files: Recorded[]): string[] {
+  return files.map((f) => f.tags.find((t) => t.name === 'Content-Type')?.value ?? '')
+}
+
+/** An index that knows about files uploaded by some earlier, other machine. */
+function indexOf(known: Record<string, string>, calls: FileIdentity[][] = []): ChainIndex {
+  return {
+    async resolve(files) {
+      const wanted = [...files]
+      calls.push(wanted)
+      const hits: Record<string, string> = {}
+      for (const file of wanted) {
+        const key = incrementalCacheKey(file.hash, file.contentType)
+        if (known[key]) hits[key] = known[key]
+      }
+
+      return hits
+    },
+  }
 }
 
 beforeEach(() => {
@@ -220,7 +236,7 @@ describe('incremental folder uploads', () => {
     expect(Object.keys(after.paths).sort()).toEqual(['assets/app.js', 'index.html'])
   })
 
-  it('pays once for two files with identical bytes', async () => {
+  it('pays once for two files with identical bytes and the same type', async () => {
     write('a.txt', 'same bytes')
     write('nested/b.txt', 'same bytes')
 
@@ -254,27 +270,79 @@ describe('incremental folder uploads', () => {
   })
 })
 
-/** An index that knows about hashes uploaded by some earlier, other machine. */
-function indexOf(known: Record<string, string>, calls: string[][] = []): ChainIndex {
-  return {
-    async resolve(hashes) {
-      const wanted = [...hashes]
-      calls.push(wanted)
-      return Object.fromEntries(wanted.filter((h) => known[h]).map((h) => [h, known[h]]))
-    },
-  }
-}
+describe('incremental content-type safety', () => {
+  it('does not collapse identical bytes served under different types', async () => {
+    // A gateway serves whatever Content-Type the data item carries, so reusing
+    // one id for both would serve b.txt as application/json.
+    write('a.json', '{"same":"bytes"}')
+    write('b.txt', '{"same":"bytes"}')
+
+    const client = stubClient()
+    const result = await uploadFolder(client.client, folder, { cache: {}, incremental: {} })
+
+    expect(result.uploaded).toBe(2)
+    expect(contentTypes(client.files()).sort()).toEqual(['application/json', 'text/plain'])
+
+    const manifest = client.manifest()
+    expect(manifest.paths['a.json'].id).not.toBe(manifest.paths['b.txt'].id)
+  })
+
+  it('keeps them apart across runs too, through the cache', async () => {
+    write('a.json', '{"same":"bytes"}')
+    write('b.txt', '{"same":"bytes"}')
+
+    let cache: TransactionCache = {}
+    const first = stubClient()
+    await uploadFolder(first.client, folder, {
+      cache,
+      incremental: {
+        onCacheUpdate(updated) {
+          cache = updated
+        },
+      },
+    })
+    const before = first.manifest()
+
+    const second = stubClient()
+    await uploadFolder(second.client, folder, { cache, incremental: {} })
+    const after = second.manifest()
+
+    expect(second.files()).toHaveLength(0)
+    expect(after.paths['a.json'].id).toBe(before.paths['a.json'].id)
+    expect(after.paths['b.txt'].id).toBe(before.paths['b.txt'].id)
+    expect(after.paths['a.json'].id).not.toBe(after.paths['b.txt'].id)
+  })
+
+  it('asks the chain for the type as well as the hash', async () => {
+    write('a.json', '{"same":"bytes"}')
+    write('b.txt', '{"same":"bytes"}')
+
+    const calls: FileIdentity[][] = []
+    await uploadFolder(stubClient().client, folder, {
+      cache: {},
+      incremental: { index: indexOf({}, calls) },
+    })
+
+    // One hash, two identities. Asking by hash alone could only ever get one
+    // answer back for two files that need different ones.
+    expect(calls).toHaveLength(1)
+    expect(calls[0]).toHaveLength(2)
+    expect(new Set(calls[0].map((f) => f.hash)).size).toBe(1)
+    expect(calls[0].map((f) => f.contentType).sort()).toEqual(['application/json', 'text/plain'])
+  })
+})
 
 describe('incremental chain-backed index', () => {
   it('reuses transaction ids found on chain when there is no local cache', async () => {
     write('index.html', '<html>index</html>')
     write('assets/app.js', 'console.log(1)')
 
-    // Learn the hashes the way a first deploy publishes them.
+    // Learn what a first deploy publishes.
     const first = stubClient()
     await uploadFolder(first.client, folder, { cache: {}, incremental: {} })
-    const hashes = hashTags(first.files())
-    const knownIds = Object.fromEntries(hashes.map((h, i) => [h, idFor(100 + i)]))
+    const files = first.files()
+    const keys = hashTags(files).map((hash, i) => incrementalCacheKey(hash, contentTypes(files)[i]))
+    const knownIds = Object.fromEntries(keys.map((key, i) => [key, idFor(100 + i)]))
 
     // CI starts from a fresh checkout: no cache file, only the chain.
     const second = stubClient()
@@ -292,7 +360,7 @@ describe('incremental chain-backed index', () => {
     ).toEqual(Object.values(knownIds).sort())
   })
 
-  it('only asks the chain about hashes the local cache could not answer', async () => {
+  it('only asks the chain about files the local cache could not answer', async () => {
     write('index.html', '<html>index</html>')
     write('assets/app.js', 'console.log(1)')
 
@@ -309,7 +377,7 @@ describe('incremental chain-backed index', () => {
 
     write('assets/app.js', 'console.log(2)')
 
-    const calls: string[][] = []
+    const calls: FileIdentity[][] = []
     await uploadFolder(stubClient().client, folder, {
       cache,
       incremental: { index: indexOf({}, calls) },
@@ -400,5 +468,16 @@ describe('incremental tag invariant', () => {
     // Off by default: no new tag, and the historic provenance tags intact.
     expect(client.files()[0].tags.some((t) => t.name === FILE_HASH_TAG)).toBe(false)
     expect(client.files()[0].tags).toContainEqual({ name: 'GIT-HASH', value: 'abc123def' })
+  })
+
+  it('leaves the non-incremental cache keyed the way it always was', async () => {
+    write('index.html', '<html>index</html>')
+
+    const cache: TransactionCache = {}
+    const result = await uploadFolder(stubClient().client, folder, { cache })
+
+    // Bare SHA-256 keys, so an existing .ario-deploy cache keeps working for
+    // anyone who never passes --incremental.
+    expect(Object.keys(result.updatedCache ?? {}).every((k) => /^[\da-f]{64}$/.test(k))).toBe(true)
   })
 })

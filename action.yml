@@ -211,18 +211,19 @@ runs:
         # Add dedupe options
         if [[ "${{ inputs.no-dedupe }}" == "true" ]]; then
           ARGS="$ARGS --no-dedupe"
-        else
-          if [[ -n "${{ inputs.dedupe-cache-max-entries }}" ]]; then
-            ARGS="$ARGS --dedupe-cache-max-entries ${{ inputs.dedupe-cache-max-entries }}"
-          fi
+        elif [[ -n "${{ inputs.dedupe-cache-max-entries }}" ]]; then
+          ARGS="$ARGS --dedupe-cache-max-entries ${{ inputs.dedupe-cache-max-entries }}"
+        fi
 
-          # Incremental uploads recover ids from the chain, which is what makes
-          # a restored-but-stale (or missing) cache cheap instead of expensive.
-          if [[ "${{ inputs.incremental }}" == "true" ]]; then
-            ARGS="$ARGS --incremental"
-            if [[ -n "${{ inputs.incremental-gateway }}" ]]; then
-              ARGS="$ARGS --incremental-gateway ${{ inputs.incremental-gateway }}"
-            fi
+        # Incremental uploads recover ids from the chain, which is what makes a
+        # missing or stale restored cache cheap instead of expensive. Passed
+        # through even alongside no-dedupe, which asks for the opposite, so the
+        # CLI refuses the combination out loud rather than this step dropping
+        # the flag and deploying as if it had never been set.
+        if [[ "${{ inputs.incremental }}" == "true" ]]; then
+          ARGS="$ARGS --incremental"
+          if [[ -n "${{ inputs.incremental-gateway }}" ]]; then
+            ARGS="$ARGS --incremental-gateway ${{ inputs.incremental-gateway }}"
           fi
         fi
 

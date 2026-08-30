@@ -18,6 +18,7 @@ import {
   assertDeployInvariantTags,
   type ChainIndex,
   type DataItemTag,
+  incrementalCacheKey,
   isArweaveId,
 } from './incremental.js'
 import type { UploadClient, UploadCost, UploadSize } from './upload-types.js'
@@ -173,6 +174,14 @@ const DEFAULT_UPLOAD_CONCURRENCY = 10
 
 interface FileUploadTask {
   cached?: { transactionId: string }
+  /**
+   * Key this file is remembered under: the bare hash outside incremental mode
+   * (unchanged historic behaviour), hash + content type inside it, so that
+   * byte-identical files served under different types cannot collapse onto a
+   * single upload and be served under the wrong one.
+   */
+  cacheKey: string
+  contentType: string
   fullPath: string
   hash: string
   relativePath: string
@@ -244,7 +253,9 @@ export async function uploadFolder(
     relativePaths.map(async (relativePath) => {
       const fullPath = path.join(folderPath, relativePath)
       const hash = needHashes ? await hashFile(fullPath) : ''
-      return { fullPath, hash, relativePath }
+      const contentType = mime.lookup(fullPath) || 'application/octet-stream'
+      const cacheKey = hash && incremental ? incrementalCacheKey(hash, contentType) : hash
+      return { cacheKey, contentType, fullPath, hash, relativePath }
     }),
   )
 
@@ -253,11 +264,11 @@ export async function uploadFolder(
   let cacheHits = 0
 
   for (const task of tasks) {
-    if (useCache && task.hash) {
-      const cached = getCachedTransaction(cache, task.hash)
+    if (useCache && task.cacheKey) {
+      const cached = getCachedTransaction(cache, task.cacheKey)
       if (cached) {
         task.cached = { transactionId: cached.transactionId }
-        cache = touchCacheEntry(cache, task.hash)
+        cache = touchCacheEntry(cache, task.cacheKey)
         cacheHits++
       }
     }
@@ -272,18 +283,22 @@ export async function uploadFolder(
    * correctness: unresolved hashes simply get uploaded.
    */
   if (incremental?.index) {
-    const unknown = [...new Set(tasks.filter((t) => !t.cached && t.hash).map((t) => t.hash))]
+    const unknown = new Map(
+      tasks
+        .filter((t) => !t.cached && t.hash)
+        .map((t) => [t.cacheKey, { contentType: t.contentType, hash: t.hash }]),
+    )
 
-    if (unknown.length > 0) {
+    if (unknown.size > 0) {
       try {
-        const found = await incremental.index.resolve(unknown)
+        const found = await incremental.index.resolve(unknown.values())
         let recovered = 0
 
         for (const task of tasks) {
-          const id = task.cached ? undefined : found[task.hash]
+          const id = task.cached ? undefined : found[task.cacheKey]
           if (isArweaveId(id)) {
             task.cached = { transactionId: id }
-            cache = setCachedTransaction(cache, task.hash, id)
+            cache = setCachedTransaction(cache, task.cacheKey, id)
             cacheHits++
             recovered++
           }
@@ -308,7 +323,7 @@ export async function uploadFolder(
    * the hash, not the path, is what is being paid for. Outside it the historic
    * one-upload-per-file behaviour is left exactly as it was.
    */
-  const uploadTargets = incremental ? dedupeTasksByHash(uncachedTasks) : uncachedTasks
+  const uploadTargets = incremental ? dedupeTasksByCacheKey(uncachedTasks) : uncachedTasks
 
   // Upload uncached files with concurrency control using p-limit
   const limit = pLimit(concurrency)
@@ -316,7 +331,7 @@ export async function uploadFolder(
   const uploadResults = await Promise.all(
     uploadTargets.map((task) =>
       limit(async () => {
-        const mimeType = mime.lookup(task.fullPath) || 'application/octet-stream'
+        const mimeType = task.contentType
 
         const uploadResult = await turbo.uploadFile({
           dataItemOpts: {
@@ -333,7 +348,7 @@ export async function uploadFolder(
             throw new Error(`Failed to upload file: ${task.relativePath}`)
           }
 
-          return { hash: task.hash, task, transactionId: null }
+          return { hash: task.cacheKey, task, transactionId: null }
         }
 
         /*
@@ -343,12 +358,12 @@ export async function uploadFolder(
          * read are not separated by an await, so the concurrent workers cannot
          * lose each other's writes.
          */
-        if (incremental && task.hash) {
-          cache = setCachedTransaction(cache, task.hash, uploadResult.id)
+        if (incremental && task.cacheKey) {
+          cache = setCachedTransaction(cache, task.cacheKey, uploadResult.id)
           incremental.onCacheUpdate?.(cache)
         }
 
-        return { hash: task.hash, task, transactionId: uploadResult.id }
+        return { hash: task.cacheKey, task, transactionId: uploadResult.id }
       }),
     ),
   )
@@ -365,11 +380,11 @@ export async function uploadFolder(
   // Point the files that shared an upload at the id it produced
   if (incremental) {
     for (const task of uncachedTasks) {
-      if (task.cached || !task.hash) {
+      if (task.cached || !task.cacheKey) {
         continue
       }
 
-      const id = getCachedTransaction(cache, task.hash)?.transactionId
+      const id = getCachedTransaction(cache, task.cacheKey)?.transactionId
       if (isArweaveId(id)) {
         task.cached = { transactionId: id }
       }
@@ -468,20 +483,24 @@ export async function uploadFolder(
 }
 
 /**
- * One task per distinct content hash, keeping the first occurrence.
+ * One task per distinct cache key, keeping the first occurrence.
+ *
+ * The key includes the content type, so two files with identical bytes but
+ * different types are still two uploads. Collapsing them would serve one of
+ * them under the MIME type of the other.
  *
  * @param tasks - Tasks that still need uploading.
  * @returns The subset that must actually be paid for.
  */
-function dedupeTasksByHash(tasks: FileUploadTask[]): FileUploadTask[] {
+function dedupeTasksByCacheKey(tasks: FileUploadTask[]): FileUploadTask[] {
   const seen = new Set<string>()
 
   return tasks.filter((task) => {
-    if (!task.hash || seen.has(task.hash)) {
-      return !task.hash
+    if (!task.cacheKey || seen.has(task.cacheKey)) {
+      return !task.cacheKey
     }
 
-    seen.add(task.hash)
+    seen.add(task.cacheKey)
     return true
   })
 }

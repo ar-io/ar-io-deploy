@@ -10,11 +10,19 @@ import {
 } from '@ardrive/turbo-sdk'
 import ora from 'ora'
 
-import { APP_NAME, DEFAULT_INCREMENTAL_GATEWAY } from '../constants/incremental.js'
+import {
+  APP_NAME,
+  CACHE_FLUSH_INTERVAL_MS,
+  DEFAULT_INCREMENTAL_GATEWAY,
+} from '../constants/incremental.js'
 import type { SignerType } from '../types/index.js'
 import { cleanupCache, loadCache, saveCache, type TransactionCache } from '../utils/cache.js'
 import { chalk } from '../utils/chalk.js'
-import { type ChainIndex, createChainIndex } from '../utils/incremental.js'
+import {
+  type ChainIndex,
+  createChainIndex,
+  ownerAddressFromPublicKey,
+} from '../utils/incremental.js'
 import { expandPath } from '../utils/path.js'
 import { createSigner } from '../utils/signer.js'
 import type { UploadClient, UploadCost, UploadSize } from '../utils/upload-types.js'
@@ -61,11 +69,16 @@ export interface UploadWorkflowIo {
 /**
  * Build the chain-backed index, or explain why there is none.
  *
- * The index is keyed on the uploader's own native address: a `File-SHA256`
- * tag is a claim anyone can stamp on any bytes, so only the wallet's own past
- * transactions are trusted to answer "have I already paid for this file?".
+ * The index is scoped to the uploading wallet: a `File-SHA256` tag is a claim
+ * anyone can stamp on any bytes, so only the wallet's own past transactions
+ * are trusted to answer "have I already paid for this file?".
  *
- * A wallet whose address cannot be determined is not fatal — the deploy falls
+ * The address is derived from the signer's public key rather than taken from
+ * `getNativeAddress()`, which returns a chain-native form for four of the five
+ * supported signer types that no gateway indexes as an owner. See
+ * `ownerAddressFromPublicKey`.
+ *
+ * A wallet whose address cannot be derived is not fatal — the deploy falls
  * back to the local cache alone and uploads what it cannot account for.
  *
  * @param client - Authenticated upload client.
@@ -79,21 +92,72 @@ async function createIncrementalIndex(
   onWarning: (message: string) => void,
 ): Promise<ChainIndex | undefined> {
   try {
-    const owner = await client.signer?.getNativeAddress()
-    if (!owner) {
-      onWarning('Incremental uploads: no wallet address available, using the local cache only')
+    const publicKey = await client.signer?.getPublicKey()
+    if (!publicKey || publicKey.length === 0) {
+      onWarning('Incremental uploads: no wallet public key available, using the local cache only')
       return undefined
     }
+
+    /*
+     * Derived from the public key, never from `getNativeAddress()`.
+     * `createChainIndex` refuses anything that is not a gateway-shaped
+     * address, so a bad derivation surfaces as a warning here rather than as
+     * a query that can only ever match nothing.
+     */
+    const owner = ownerAddressFromPublicKey(publicKey)
 
     return createChainIndex({
       appName: APP_NAME,
       gatewayUrl: config['incremental-gateway'] ?? DEFAULT_INCREMENTAL_GATEWAY,
+      onWarning,
       owner,
     })
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
-    onWarning(`Incremental uploads: could not determine the wallet address (${message})`)
+    onWarning(`Incremental uploads: could not derive the wallet address (${message})`)
     return undefined
+  }
+}
+
+/**
+ * A cache writer that survives an interrupt without amplifying it.
+ *
+ * Recording an id only at the end of a run loses everything a killed deploy
+ * already paid for. Writing all of them, one synchronous `writeFileSync` per
+ * upload, is worse: at the default 10,000-entry cap the file reaches a couple
+ * of megabytes, so a 143-file deploy rewrites hundreds of megabytes and blocks
+ * the event loop the concurrent upload workers run on. Coalescing on a short
+ * interval keeps the crash window small and the cost flat.
+ *
+ * @param maxEntries - LRU bound applied before each write; 0 disables writing.
+ * @returns A `record` to call after every upload, and a `flush` for the end.
+ */
+function createCacheWriter(maxEntries: number): {
+  flush: () => void
+  record: (cache: TransactionCache) => void
+} {
+  let pending: TransactionCache | undefined
+  let lastWrite = 0
+
+  const write = (): void => {
+    if (!pending || maxEntries <= 0) {
+      pending = undefined
+      return
+    }
+
+    saveCache(cleanupCache(pending, maxEntries))
+    lastWrite = Date.now()
+    pending = undefined
+  }
+
+  return {
+    flush: write,
+    record(cache: TransactionCache) {
+      pending = cache
+      if (Date.now() - lastWrite >= CACHE_FLUSH_INTERVAL_MS) {
+        write()
+      }
+    },
   }
 }
 
@@ -217,6 +281,16 @@ export async function runUploadWorkflow(
       const filePath = expandPath(config['deploy-file'])
       spinner.start(`Uploading file ${chalk.yellow(config['deploy-file'])}`)
 
+      if (config.incremental) {
+        /*
+         * Incremental reuse is a folder-level idea: it is the manifest that
+         * lets unchanged files keep their existing ids. A single file has no
+         * manifest, so say so rather than appearing to honour the flag.
+         */
+        spinner.warn('--incremental applies to folder uploads; ignoring it for --deploy-file')
+        spinner.start(`Uploading file ${chalk.yellow(config['deploy-file'])}`)
+      }
+
       let cache = config['dedupe-cache-max-entries'] > 0 ? loadCache() : {}
       const uploadResult = await uploadFile(uploadClient, filePath, { cache, fundingMode })
 
@@ -243,42 +317,47 @@ export async function runUploadWorkflow(
       }
     } else {
       const folderPath = expandPath(config['deploy-folder'])
-      spinner.start(`Uploading folder ${chalk.yellow(config['deploy-folder'])}`)
-
-      let cache = config['dedupe-cache-max-entries'] > 0 ? loadCache() : {}
+      const writer = createCacheWriter(config['dedupe-cache-max-entries'])
 
       /*
-       * Persist every id the moment it lands rather than only at the end of
-       * the run. A deploy killed part-way through is the normal case, and an
-       * upload that was paid for but forgotten has to be paid for again.
+       * Any warning stops the spinner, so it is restarted from one place
+       * rather than unconditionally — an unconditional restart printed the
+       * "Uploading folder" line twice on every incremental run.
        */
-      const persist = (updated: TransactionCache): void => {
-        if (config['dedupe-cache-max-entries'] > 0) {
-          saveCache(cleanupCache(updated, config['dedupe-cache-max-entries']))
-        }
+      const startUploadSpinner = (): void => {
+        spinner.start(`Uploading folder ${chalk.yellow(config['deploy-folder'])}`)
+      }
+
+      const warn = (message: string): void => {
+        spinner.warn(message)
+        startUploadSpinner()
       }
 
       const incremental: IncrementalOptions | undefined = config.incremental
         ? {
-            index: await createIncrementalIndex(uploadClient, config, (message) => {
-              spinner.warn(message)
-            }),
-            onCacheUpdate: persist,
-            onWarning: (message) => spinner.warn(message),
+            index: await createIncrementalIndex(uploadClient, config, spinner.warn.bind(spinner)),
+            onCacheUpdate: writer.record,
+            onWarning: warn,
           }
         : undefined
 
-      if (incremental) {
-        spinner.start(`Uploading folder ${chalk.yellow(config['deploy-folder'])}`)
-      }
+      startUploadSpinner()
 
-      const uploadResult: FolderUploadResult = await uploadFolder(uploadClient, folderPath, {
-        cache,
-        fallbackFile: config['fallback-file'],
-        fundingMode,
-        incremental,
-        throwOnFailure: true,
-      })
+      let cache = config['dedupe-cache-max-entries'] > 0 ? loadCache() : {}
+
+      let uploadResult: FolderUploadResult
+      try {
+        uploadResult = await uploadFolder(uploadClient, folderPath, {
+          cache,
+          fallbackFile: config['fallback-file'],
+          fundingMode,
+          incremental,
+          throwOnFailure: true,
+        })
+      } finally {
+        // Whatever landed before a failure is still paid for, and still ours.
+        writer.flush()
+      }
 
       if (!uploadResult.transactionId) {
         spinner.fail('Folder upload failed: no transaction ID returned')

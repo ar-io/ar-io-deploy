@@ -42,6 +42,12 @@ export function loadCache(): TransactionCache {
 /**
  * Save the transaction cache to disk
  * Creates the cache directory if it doesn't exist
+ *
+ * Written to a sibling temp file and renamed into place. `loadCache` treats an
+ * unparseable file as an empty one, so a process interrupted mid-write would
+ * otherwise discard every transaction id it had already paid for — silently,
+ * and precisely when the cache matters most. `renameSync` is atomic within a
+ * directory on both POSIX and Windows.
  */
 export function saveCache(cache: TransactionCache): void {
   const cachePath = getCachePath()
@@ -51,7 +57,19 @@ export function saveCache(cache: TransactionCache): void {
     fs.mkdirSync(cacheDir, { recursive: true })
   }
 
-  fs.writeFileSync(cachePath, JSON.stringify(cache, null, 2), 'utf8')
+  const tempPath = `${cachePath}.${process.pid}.tmp`
+  try {
+    fs.writeFileSync(tempPath, JSON.stringify(cache, null, 2), 'utf8')
+    fs.renameSync(tempPath, cachePath)
+  } catch (error) {
+    try {
+      fs.rmSync(tempPath, { force: true })
+    } catch {
+      // The temp file is already gone, or unremovable; the original stands.
+    }
+
+    throw error
+  }
 }
 
 /**

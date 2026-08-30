@@ -52,3 +52,6 @@ export const DEPLOY_VARYING_TAG_NAMES = new Set([
   'timestamp',
   'version',
 ])
+
+/** How often the transaction cache may be rewritten during a folder upload. */
+export const CACHE_FLUSH_INTERVAL_MS = 500

@@ -55,6 +55,30 @@ export function validateFolderExists(value: string): string | true {
 }
 
 /**
+ * Validate that incremental uploads are not asked for alongside a disabled
+ * dedupe cache.
+ *
+ * There are three spellings of "no dedupe cache" — `--no-dedupe`,
+ * `--dedupe-cache-max-entries 0`, and the action inputs that map to them — and
+ * they must all mean the same thing next to `--incremental`, which exists to
+ * reuse previous uploads. `--no-dedupe` is refused by oclif exclusivity; this
+ * covers the other spelling with the same outcome.
+ */
+export function validateIncrementalDedupe(
+  incremental: boolean,
+  dedupeCacheMaxEntries: number,
+): string | true {
+  if (incremental && dedupeCacheMaxEntries <= 0) {
+    return (
+      '--incremental reuses previous uploads and cannot be combined with deduplication turned off. ' +
+      'Drop --no-dedupe, or raise --dedupe-cache-max-entries above 0.'
+    )
+  }
+
+  return true
+}
+
+/**
  * Validate ArNS name is not empty
  */
 export function validateArnsName(value: string): string | true {

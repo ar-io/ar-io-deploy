@@ -19,6 +19,7 @@ import {
   createSolanaArnsSigner,
   type SolanaCluster,
 } from '../utils/solana.js'
+import { validateIncrementalDedupe } from '../utils/validators.js'
 import { runUploadWorkflow } from '../workflows/upload-workflow.js'
 
 export default class Deploy extends Command {
@@ -147,6 +148,19 @@ export default class Deploy extends Command {
       const effectiveCacheMaxEntries = baseConfig['no-dedupe']
         ? 0
         : baseConfig['dedupe-cache-max-entries']
+
+      /*
+       * `--no-dedupe` is refused by oclif exclusivity; this catches the other
+       * way of saying the same thing, so both spellings fail identically
+       * instead of one being silently honoured.
+       */
+      const incrementalConflict = validateIncrementalDedupe(
+        baseConfig.incremental,
+        effectiveCacheMaxEntries,
+      )
+      if (incrementalConflict !== true) {
+        this.error(incrementalConflict)
+      }
 
       const deployConfig: DeployConfig = {
         'arns-name': baseConfig['arns-name'],

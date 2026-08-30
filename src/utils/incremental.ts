@@ -13,9 +13,9 @@
  *
  *   1. a per-file `File-SHA256` tag, so an upload stays findable from nothing
  *      but the bytes on disk;
- *   2. a chain-backed index that recovers hash -> transaction id by sweeping
- *      the uploader's own past items over GraphQL, which is the only layer
- *      that survives a fresh CI checkout.
+ *   2. a chain-backed index that recovers a transaction id by sweeping the
+ *      uploader's own past items over GraphQL, which is the only layer that
+ *      survives a fresh CI checkout.
  *
  * ---------------------------------------------------------------------------
  * THE RULE THAT MAKES THIS WORK
@@ -29,6 +29,8 @@
  * every deploy regardless.
  */
 
+import crypto from 'node:crypto'
+
 import {
   CHAIN_INDEX_MAX_PAGES,
   CHAIN_INDEX_PAGE_SIZE,
@@ -38,6 +40,12 @@ import {
 } from '../constants/incremental.js'
 
 export type DataItemTag = { name: string; value: string }
+
+/** A file's identity for reuse purposes: its bytes *and* how it is served. */
+export interface FileIdentity {
+  contentType: string
+  hash: string
+}
 
 const ARWEAVE_ID = /^[\w-]{43}$/
 const SHA256 = /^[\da-f]{64}$/
@@ -50,6 +58,81 @@ export function isArweaveId(value: string | undefined): value is string {
 /** A lowercase hex SHA-256, as `hashFile` produces. */
 export function isContentHash(value: string | undefined): value is string {
   return typeof value === 'string' && SHA256.test(value)
+}
+
+/**
+ * The wallet address a gateway indexes a data item's owner as.
+ *
+ * Deliberately not `signer.getNativeAddress()`. That returns a base58 public
+ * key for Solana, a `0x…` address for Ethereum and Polygon, and a `kyve1…`
+ * bech32 address for KYVE, none of which a gateway's `owners` filter matches.
+ * The query answers HTTP 200 with an empty edge list, so filtering on the
+ * native address would cost a round trip per deploy and reuse nothing, with
+ * no error to warn on.
+ *
+ * Gateways index the owner of every signature type as
+ * base64url(sha256(publicKey)). Verified against live arweave.net for RSA
+ * (Arweave), ed25519 (Solana) and secp256k1 (Ethereum) data items. For an
+ * Arweave signer this happens to equal `getNativeAddress()`, which is why the
+ * bug would only ever have shown up for the other four signer types.
+ *
+ * The same derivation as `ownerToAddress` inside `@ardrive/turbo-sdk`
+ * (`sha256B64Url(fromB64Url(owner))`), which is not reachable from that
+ * package's public exports — hence the three lines here rather than an import
+ * of a deep internal path.
+ *
+ * @param publicKey - The signer's raw public key.
+ * @returns The 43-character base64url address the `owners` filter matches.
+ */
+export function ownerAddressFromPublicKey(publicKey: Buffer | Uint8Array): string {
+  return crypto.createHash('sha256').update(publicKey).digest('base64url')
+}
+
+/**
+ * Reject an owner a gateway cannot possibly match.
+ *
+ * A gateway answers a query for an unknown owner with HTTP 200 and an empty
+ * edge list, so a chain-native address here would look exactly like "this
+ * wallet has never uploaded anything" on every deploy, forever, with nothing
+ * to warn on. Naming the mistake is the only way it gets noticed.
+ *
+ * @param owner - The value about to be used as the GraphQL `owners` filter.
+ * @throws If it is not a 43-character base64url address.
+ */
+export function assertOwnerAddress(owner: string): void {
+  // Not isArweaveId(): its type predicate narrows the parameter to never here.
+  if (ARWEAVE_ID.test(owner)) {
+    return
+  }
+
+  const looksNative = owner.startsWith('0x')
+    ? 'an Ethereum-style address'
+    : owner.startsWith('kyve1')
+      ? 'a KYVE bech32 address'
+      : 'a chain-native address or public key'
+
+  throw new Error(
+    `Incremental uploads need the 43-character base64url address a gateway indexes an owner ` +
+      `as, but got ${looksNative}: ${owner}. Derive it from the signer public key with ` +
+      `ownerAddressFromPublicKey(), not from signer.getNativeAddress().`,
+  )
+}
+
+/**
+ * Cache and index key for one file.
+ *
+ * Content hash alone is not enough. Byte-identical files served under
+ * different types — `a.json` and `b.txt` holding the same bytes — would
+ * collapse onto a single upload, and whichever `Content-Type` reached the
+ * network first would then be served for both. Including the type keeps them
+ * distinct in the local cache, in the in-run dedupe, and on chain.
+ *
+ * @param hash - SHA-256 of the file contents.
+ * @param contentType - MIME type the file is served as.
+ * @returns A key safe to use in the transaction cache and the chain index.
+ */
+export function incrementalCacheKey(hash: string, contentType: string): string {
+  return `${hash}|${contentType}`
 }
 
 /**
@@ -82,7 +165,12 @@ export interface ChainIndexOptions {
   gatewayUrl: string
   /** Bound on pages walked before giving up. */
   maxPages?: number
-  /** Native address of the uploading wallet. Only its own items are trusted. */
+  /** Reports answers that had to be discarded. */
+  onWarning?: (message: string) => void
+  /**
+   * base64url(sha256(publicKey)) of the uploading wallet — see
+   * `ownerAddressFromPublicKey`. Only this wallet's own items are trusted.
+   */
   owner: string
   /** Transactions requested per page. */
   pageSize?: number
@@ -92,18 +180,29 @@ export interface ChainIndexOptions {
 
 export interface ChainIndex {
   /**
-   * Look up transaction ids for content hashes among the owner's past uploads.
+   * Look up transaction ids among the owner's past uploads.
    *
-   * @param hashes - Content hashes still needed after the local cache.
-   * @returns A hash -> transaction id map holding only what was found.
+   * @param files - Hash and content type of everything still needed after the
+   *   local cache.
+   * @returns A map from `incrementalCacheKey` to transaction id, holding only
+   *   what was found and verified.
    */
-  resolve(hashes: Iterable<string>): Promise<Record<string, string>>
+  resolve(files: Iterable<FileIdentity>): Promise<Record<string, string>>
+}
+
+interface GraphQlEdge {
+  cursor?: string
+  node?: {
+    id?: string
+    owner?: { address?: string }
+    tags?: DataItemTag[]
+  }
 }
 
 interface GraphQlResponse {
   data?: {
     transactions?: {
-      edges?: Array<{ cursor?: string; node?: { id?: string; tags?: DataItemTag[] } }>
+      edges?: GraphQlEdge[]
       pageInfo?: { hasNextPage?: boolean }
     }
   }
@@ -111,15 +210,19 @@ interface GraphQlResponse {
 }
 
 /**
- * An index of hash -> transaction id, rebuilt from the chain over GraphQL.
+ * An index of hash + content type -> transaction id, rebuilt from the chain.
  *
  * This is the layer that matters in CI: a fresh checkout has no
  * `.ario-deploy/transaction-cache.json`, so without it every redeploy pays for
  * the whole bundle again.
  *
- * Only the uploader's own transactions are consulted. A `File-SHA256` tag is
- * a claim, not a proof — anyone can stamp your hash on their bytes — so the
- * `owners` filter is what makes the answer trustworthy.
+ * Every answer is verified against what the gateway itself returns before it
+ * is believed. The `owners` argument is applied server-side by whichever host
+ * `--incremental-gateway` names, and a wrong id here does not merely break one
+ * deploy — it is written into the local cache and poisons every later one. So
+ * an edge must carry the expected owner and the expected `Content-Type` or it
+ * is discarded. A `File-SHA256` tag is a claim, not a proof; anyone can stamp
+ * your hash on their own bytes.
  *
  * Gateway GraphQL indexing lags an upload by minutes, so two machines
  * deploying the same *new* file at the same moment can each pay for it. That
@@ -135,16 +238,21 @@ export function createChainIndex(options: ChainIndexOptions): ChainIndex {
     fetchImpl = fetch,
     gatewayUrl,
     maxPages = CHAIN_INDEX_MAX_PAGES,
+    onWarning,
     owner,
     pageSize = CHAIN_INDEX_PAGE_SIZE,
     timeoutMs = CHAIN_INDEX_TIMEOUT_MS,
   } = options
+
+  assertOwnerAddress(owner)
 
   const endpoint = `${gatewayUrl.replace(/\/+$/, '')}/graphql`
 
   /*
    * Filtering on the hash tag itself means the sweep only ever sees items this
    * run cares about, so a long deployment history costs nothing to page past.
+   * `owner{address}` is selected so the server-side filter can be re-checked
+   * here rather than trusted.
    */
   const query = `query($owner:String!,$hashes:[String!]!,$after:String){
   transactions(
@@ -158,24 +266,31 @@ export function createChainIndex(options: ChainIndexOptions): ChainIndex {
     after:$after
   ){
     pageInfo{hasNextPage}
-    edges{cursor node{id tags{name value}}}
+    edges{cursor node{id owner{address} tags{name value}}}
   }
 }`
 
   return {
-    async resolve(hashes: Iterable<string>): Promise<Record<string, string>> {
-      const wanted = new Set([...hashes].filter((hash) => isContentHash(hash)))
+    async resolve(files: Iterable<FileIdentity>): Promise<Record<string, string>> {
+      const wanted = new Map<string, FileIdentity>()
+      for (const file of files) {
+        if (isContentHash(file.hash)) {
+          wanted.set(incrementalCacheKey(file.hash, file.contentType), file)
+        }
+      }
+
       if (wanted.size === 0) {
         return {}
       }
 
       const found: Record<string, string> = {}
-      const values = [...wanted]
+      const hashes = [...new Set([...wanted.values()].map((file) => file.hash))]
       let cursor: null | string = null
+      let rejected = 0
 
       for (let page = 0; page < maxPages && Object.keys(found).length < wanted.size; page++) {
         const response = await fetchImpl(endpoint, {
-          body: JSON.stringify({ query, variables: { after: cursor, hashes: values, owner } }),
+          body: JSON.stringify({ query, variables: { after: cursor, hashes, owner } }),
           headers: { 'content-type': 'application/json' },
           method: 'POST',
           signal: AbortSignal.timeout(timeoutMs),
@@ -198,21 +313,44 @@ export function createChainIndex(options: ChainIndexOptions): ChainIndex {
         const edges = transactions.edges ?? []
         for (const edge of edges) {
           cursor = edge.cursor ?? cursor
-          const hash = edge.node?.tags?.find((tag) => tag.name === FILE_HASH_TAG)?.value
+
           const id = edge.node?.id
+          const tags = edge.node?.tags ?? []
+          const hash = tags.find((tag) => tag.name === FILE_HASH_TAG)?.value
+          const contentType = tags.find((tag) => tag.name === 'Content-Type')?.value
+
+          if (!isArweaveId(id) || !isContentHash(hash) || contentType === undefined) {
+            continue
+          }
+
           /*
-           * Newest first, and any upload of these exact bytes is equally
-           * valid, so the first sighting wins and there is nothing to
-           * reconcile.
+           * Never take the server's word for its own filter. A hostile or
+           * buggy gateway returning somebody else's id would put it in the
+           * manifest and in the cache, breaking every future deploy too.
            */
-          if (isContentHash(hash) && isArweaveId(id) && wanted.has(hash) && !found[hash]) {
-            found[hash] = id
+          if (edge.node?.owner?.address !== owner) {
+            rejected++
+            continue
+          }
+
+          const key = incrementalCacheKey(hash, contentType)
+          /*
+           * Newest first, and any upload of these exact bytes under this exact
+           * type is equally valid, so the first sighting wins and there is
+           * nothing to reconcile.
+           */
+          if (wanted.has(key) && !found[key]) {
+            found[key] = id
           }
         }
 
         if (!transactions.pageInfo?.hasNextPage || edges.length === 0) {
           break
         }
+      }
+
+      if (rejected > 0) {
+        onWarning?.(`Ignored ${rejected} result(s) from ${endpoint} not owned by ${owner}`)
       }
 
       return found
