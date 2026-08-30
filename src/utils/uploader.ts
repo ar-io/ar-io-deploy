@@ -174,7 +174,11 @@ export async function uploadFile(
 const DEFAULT_UPLOAD_CONCURRENCY = 10
 
 export interface FileUploadTask {
-  /** File size, so a plan can be priced before anything is signed. */
+  /**
+   * File size, so a plan can be priced before anything is signed. Zero outside
+   * incremental mode, where nothing reads it and a `statSync` per file would
+   * be a blocking syscall bought for nothing.
+   */
   bytes: number
   cached?: { transactionId: string }
   /**
@@ -190,7 +194,13 @@ export interface FileUploadTask {
   relativePath: string
 }
 
-/** Everything decided about a folder upload before any of it is paid for. */
+/**
+ * Everything decided about a folder upload before any of it is paid for.
+ *
+ * Single use. `uploadFolder` marks tasks as resolved on the shared objects it
+ * holds but does not recompute `uploadTargets`, so handing the same plan to a
+ * second `uploadFolder` call re-uploads everything. Make a new one per call.
+ */
 export interface FolderUploadPlan {
   cache: TransactionCache
   cacheHits: number
@@ -234,21 +244,7 @@ export async function planFolderUpload(
   // Get all files in the folder
   const relativePaths = getAllFiles(folderPath)
 
-  if (relativePaths.length === 0) {
-    throw new Error('Folder is empty, nothing to upload')
-  }
-
-  /*
-   * Validate before uploading anything: every check below this point happens
-   * after files have been paid for, and a mistyped fallback should cost
-   * nothing.
-   */
-  if (options?.fallbackFile !== undefined && !relativePaths.includes(options.fallbackFile)) {
-    throw new Error(
-      `Fallback file not found in folder: ${options.fallbackFile}. ` +
-        `It must be a path relative to the deploy folder, e.g. "404.html".`,
-    )
-  }
+  assertUploadableFolder(relativePaths, options?.fallbackFile)
 
   /*
    * Hash every file when the local cache is in play, and always in incremental
@@ -263,7 +259,8 @@ export async function planFolderUpload(
       const contentType = mime.lookup(fullPath) || 'application/octet-stream'
       const cacheKey = hash && incremental ? incrementalCacheKey(hash, contentType) : hash
       return {
-        bytes: fs.statSync(fullPath).size,
+        // Only a plan is priced, and only an incremental one is.
+        bytes: incremental ? fs.statSync(fullPath).size : 0,
         cacheKey,
         contentType,
         fullPath,
@@ -382,20 +379,34 @@ export async function uploadFolder(
     incremental?: IncrementalOptions
     /**
      * A plan from `planFolderUpload`, when the caller has already made one to
-     * quote the cost. Its cache supersedes `cache`, since it carries anything
-     * the chain lookup recovered. Omitted, one is made here.
+     * quote the cost. Single use, and its cache supersedes `cache` since it
+     * carries whatever the chain lookup recovered — passing one is enough to
+     * put the cache in play. Omitted, a plan is made here.
      */
     plan?: FolderUploadPlan
     throwOnFailure?: boolean
   },
 ): Promise<FolderUploadResult> {
   const concurrency = options?.concurrency ?? DEFAULT_UPLOAD_CONCURRENCY
-  const useCache = options?.cache !== undefined
+  /*
+   * A plan always carries a cache, so passing one counts. Reading only
+   * `options.cache` here silently dropped every non-incremental cache update
+   * and returned `updatedCache: undefined` to a caller who had done nothing
+   * wrong.
+   */
+  const useCache = options?.cache !== undefined || options?.plan !== undefined
   const incremental = options?.incremental
 
   const plan = options?.plan ?? (await planFolderUpload(folderPath, options))
   const { relativePaths, tasks, uncachedTasks, uploadTargets } = plan
   let { cache, cacheHits } = plan
+
+  /*
+   * Re-checked even when the plan came from outside. These are the cheap
+   * guards that stop a typo costing a whole folder upload, and a caller that
+   * built its own plan must not be the reason they are skipped.
+   */
+  assertUploadableFolder(relativePaths, options?.fallbackFile)
 
   // Upload uncached files with concurrency control using p-limit
   const limit = pLimit(concurrency)
@@ -452,9 +463,17 @@ export async function uploadFolder(
 
   /*
    * Unconditionally, not gated on throwOnFailure: Promise.all always
-   * propagated a thrown error, and that flag only ever governed an upload
-   * that came back without an id. Only the timing changes — the failure now
-   * waits for its siblings to finish first.
+   * propagated a thrown error, and that flag only ever governed an upload that
+   * came back without an id.
+   *
+   * Two things do change, deliberately. Which error surfaces: Promise.all
+   * reported whichever failed first in time, this reports the lowest-index
+   * one. And how long a doomed deploy takes to say so: the whole p-limit queue
+   * drains first, so a systemic failure on a large folder is reported at the
+   * end rather than within milliseconds. p-limit was never cancelled, so the
+   * same uploads were always attempted and the bill is unchanged — the trade
+   * is a slower error message in exchange for not stranding ids that nobody
+   * will flush.
    */
   const rejection = settled.find((outcome) => outcome.status === 'rejected')
   if (rejection?.status === 'rejected') {
@@ -572,6 +591,26 @@ export async function uploadFolder(
     transactionId: manifestUploadResult.id,
     updatedCache: useCache || incremental ? cache : undefined,
     uploaded: uploadTargets.length - failedUploads.length,
+  }
+}
+
+/**
+ * The two checks worth making before a single byte is paid for.
+ *
+ * @param relativePaths - Every file found in the folder.
+ * @param fallbackFile - The manifest fallback, when one was asked for.
+ * @throws If the folder is empty or the fallback is not in it.
+ */
+function assertUploadableFolder(relativePaths: string[], fallbackFile?: string): void {
+  if (relativePaths.length === 0) {
+    throw new Error('Folder is empty, nothing to upload')
+  }
+
+  if (fallbackFile !== undefined && !relativePaths.includes(fallbackFile)) {
+    throw new Error(
+      `Fallback file not found in folder: ${fallbackFile}. ` +
+        `It must be a path relative to the deploy folder, e.g. "404.html".`,
+    )
   }
 }
 

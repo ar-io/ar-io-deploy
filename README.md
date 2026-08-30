@@ -397,7 +397,7 @@ ario-deploy deploy --wallet ./wallet.json --incremental
 
 1. Every file in the folder is hashed (SHA-256).
 2. Each file is looked up in the local dedupe cache, and then — for anything the cache cannot answer — among your own past uploads on chain.
-3. Only the remainder is uploaded, and each transaction id reaches the cache as it lands — on the leading edge, then coalesced onto a 500 ms trailing timer, and flushed on `SIGINT`/`SIGTERM` so Ctrl-C does not lose files you have already paid for.
+3. Only the remainder is uploaded, and each transaction id reaches the cache as it lands — on the leading edge, then coalesced onto a 500 ms trailing timer, and flushed on `SIGINT`/`SIGTERM` so Ctrl-C does not lose files you have already paid for. `SIGHUP` and `SIGBREAK` are not handled, so a closed terminal or a dropped SSH session can still lose the current batch; CI is covered, since GitHub Actions cancels with `SIGINT` then `SIGTERM`.
 4. The manifest is assembled from the remembered ids plus the new ones.
 
 **Why the on-chain lookup matters:** every uploaded file carries a `File-SHA256` tag, which makes it findable again from nothing but the bytes on disk. That is what a CI job needs. CI runs from a fresh checkout, so `.ario-deploy/transaction-cache.json` is often missing or stale even with `actions/cache` restoring it — and without the on-chain lookup every redeploy pays for the whole bundle again.
@@ -411,8 +411,10 @@ ario-deploy deploy --wallet ./wallet.json --incremental
 **Limits and caveats:**
 
 - **Recovery is capped at 2,000 files per deploy** (20 GraphQL pages of 100). Anything past that is uploaded rather than reused; nothing is ever wrong, only unreused.
+- **A fully reused redeploy skips the credits pre-flight**, since there are no pending bytes to price and the manifest itself is not quoted. Below the free-tier threshold that is right, but a manifest with many thousands of paths is not free, so a wallet at nearly zero credits could fail at the manifest rather than being refused up front.
 - **Gateway GraphQL indexing lags an upload by a few minutes.** Two machines deploying the same _new_ file at the same moment can each pay for it. It costs a fraction of a cent and never produces a wrong manifest.
 - **A gateway that is slow, unreachable or erroring costs reuse, not correctness.** Unresolved files are simply uploaded, and the run says so.
+- **A doomed deploy takes longer to say so.** Every queued upload settles before a failure is reported, so a systemic failure (bad credentials, exhausted credits) on a very large folder surfaces at the end rather than immediately. The same uploads were always attempted, so the bill is unchanged; the alternative stranded ids that had been paid for and never written down.
 - **Ignored for `--deploy-file`.** Reuse works through the manifest, and a single file has no manifest. The run warns rather than silently doing nothing.
 - **Cache entries are keyed differently in each mode**, so a project that toggles `--incremental` on and off stores up to two entries per file (`<sha256>` and `<sha256>|<mime-type>`) against the shared `--dedupe-cache-max-entries` LRU cap. Reuse still works in both directions; the effective capacity just halves for files deployed both ways. Raise the cap, or delete `.ario-deploy/` once, if you switch back and forth.
 

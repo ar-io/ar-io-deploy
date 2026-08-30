@@ -205,6 +205,26 @@ describe('createCacheWriter on a signal', () => {
     writer.dispose()
   })
 
+  it('still re-raises when the flush itself fails', () => {
+    const raise = vi.fn()
+    const writer = createCacheWriter(10_000, { raise })
+    writer.record(cacheOf(1))
+    writer.record(cacheOf(2))
+
+    // A full disk or a read-only mount. If this escapes the handler it becomes
+    // an uncaughtException, the re-raise never runs, and the process reports
+    // exit 1 instead of death by signal.
+    const failing = vi.spyOn(fs, 'writeFileSync').mockImplementation(() => {
+      throw new Error('ENOSPC: no space left on device')
+    })
+
+    expect(() => process.emit('SIGINT')).not.toThrow()
+    expect(raise).toHaveBeenCalledWith('SIGINT')
+
+    failing.mockRestore()
+    writer.dispose()
+  })
+
   it('flushes on SIGTERM too', () => {
     const raise = vi.fn()
     const writer = createCacheWriter(10_000, { raise })
@@ -232,5 +252,45 @@ describe('createCacheWriter on a signal', () => {
     // and a long-lived caller would otherwise leak a handler per run.
     expect(listenersFor('SIGINT')).toBe(before.int)
     expect(listenersFor('SIGTERM')).toBe(before.term)
+  })
+})
+
+/**
+ * The suite above runs on fake timers, which cannot distinguish a real unref'd
+ * timer from a ref'd one — it would stay green if the trailing write were the
+ * only thing keeping the process alive. This one uses the real event loop.
+ */
+describe('createCacheWriter on real timers', () => {
+  beforeEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('flushes a burst after a real quiet period', async () => {
+    const writer = createCacheWriter(10_000)
+
+    writer.record(cacheOf(1))
+    writer.record(cacheOf(6))
+    expect(Object.keys(onDisk())).toHaveLength(1)
+
+    await new Promise((resolve) => {
+      setTimeout(resolve, CACHE_FLUSH_INTERVAL_MS + 100)
+    })
+
+    expect(Object.keys(onDisk())).toHaveLength(6)
+    writer.dispose()
+  })
+
+  it('leaves nothing on the event loop that would keep a CLI running', () => {
+    const writer = createCacheWriter(10_000)
+
+    writer.record(cacheOf(1))
+    writer.record(cacheOf(2))
+
+    // An unref'd handle is not counted among the things holding the loop open.
+    const held = (process as unknown as { _getActiveHandles: () => unknown[] })._getActiveHandles()
+    const timers = held.filter((handle) => handle?.constructor?.name === 'Timeout')
+
+    expect(timers).toHaveLength(0)
+    writer.dispose()
   })
 })

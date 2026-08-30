@@ -47,7 +47,7 @@ Located at `.ario-deploy/transaction-cache.json` (relative to cwd). Maps SHA-256
 
 ### Incremental Uploads (`--incremental`, opt-in)
 
-`src/utils/incremental.ts` adds the two things the local cache cannot do: a `File-SHA256` tag on every uploaded file, and a chain-backed index (`createChainIndex`) that rebuilds the hash -> transaction id map by querying the uploader's own past items over GraphQL. That index is what makes a fresh CI checkout cheap. Ids reach disk during the run — `createCacheWriter` writes on the leading edge, then coalesces onto a 500 ms **trailing** timer (unref'd) and flushes on `SIGINT`/`SIGTERM`, because a leading edge alone is a throttle that strands a whole concurrent batch, and Ctrl-C runs no `finally`. Call `dispose()` or the signal handlers leak.
+`src/utils/incremental.ts` adds the two things the local cache cannot do: a `File-SHA256` tag on every uploaded file, and a chain-backed index (`createChainIndex`) that rebuilds the hash -> transaction id map by querying the uploader's own past items over GraphQL. That index is what makes a fresh CI checkout cheap. Ids reach disk during the run — `createCacheWriter` writes on the leading edge, then coalesces onto a 500 ms **trailing** timer (unref'd) and flushes on `SIGINT`/`SIGTERM`, because a leading edge alone is a throttle that strands a whole concurrent batch, and Ctrl-C runs no `finally`. Call `dispose()` on every path out — including the ones where `io.error` throws — or the handlers leak one per run.
 
 Three things are load-bearing and easy to break:
 

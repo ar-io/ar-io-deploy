@@ -13,6 +13,7 @@ import type { TransactionCache } from '../../src/utils/cache.js'
 import { incrementalCacheKey, ownerAddressFromPublicKey } from '../../src/utils/incremental.js'
 import { runUploadWorkflow } from '../../src/workflows/upload-workflow.js'
 import { TEST_ARWEAVE_WALLET } from '../constants.js'
+import { mockInsufficientBalance } from '../mocks/turbo-handlers.js'
 import { server } from '../setup.js'
 
 /**
@@ -379,6 +380,52 @@ describe('the credits pre-flight prices what will actually be sent', () => {
     expect(quoted).toHaveLength(1)
     // Two 60,000-byte chunks, not the ~360 KB folder.
     expect(Number(quoted[0])).toBe(120_000)
+  })
+})
+
+/** Signal listeners currently registered, so a leak shows up as a delta. */
+function counts(): { int: number; term: number } {
+  return { int: process.listenerCount('SIGINT'), term: process.listenerCount('SIGTERM') }
+}
+
+describe('signal handlers do not outlive a failed run', () => {
+  it('cleans up when the credits check refuses the deploy', async () => {
+    writeBigFolder()
+    const before = counts()
+
+    server.use(
+      ...mockInsufficientBalance('100', '99999999999999'),
+      graphqlHandler([]),
+      uploadHandler(),
+    )
+
+    // io.error throws, so every path out of the pre-flight is an exception —
+    // and each leaked one handler per run until MaxListenersExceededWarning.
+    await expect(runUploadWorkflow(DEPLOY_KEY, config(), io)).rejects.toThrow()
+
+    expect(counts()).toEqual(before)
+  })
+
+  it('cleans up after a successful run', async () => {
+    const before = counts()
+    server.use(graphqlHandler([]), uploadHandler())
+
+    await runUploadWorkflow(DEPLOY_KEY, config(), io)
+
+    expect(counts()).toEqual(before)
+  })
+
+  it('registers none at all for a single file', async () => {
+    const before = counts()
+    server.use(uploadHandler())
+
+    await runUploadWorkflow(
+      DEPLOY_KEY,
+      config({ 'deploy-file': path.join(folder, 'index.html') }),
+      io,
+    )
+
+    expect(counts()).toEqual(before)
   })
 })
 

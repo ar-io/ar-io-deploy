@@ -9,7 +9,7 @@ import type { TransactionCache } from '../../src/utils/cache.js'
 import type { ChainIndex, FileIdentity } from '../../src/utils/incremental.js'
 import { incrementalCacheKey } from '../../src/utils/incremental.js'
 import type { UploadClient, UploadFileArgs } from '../../src/utils/upload-types.js'
-import { incrementalFileTags, uploadFolder } from '../../src/utils/uploader.js'
+import { incrementalFileTags, planFolderUpload, uploadFolder } from '../../src/utils/uploader.js'
 
 /**
  * Arweave storage is permanent, so paying twice for byte-identical files buys
@@ -267,6 +267,71 @@ describe('incremental folder uploads', () => {
     })
 
     expect(snapshots).toEqual([1, 2, 3])
+  })
+})
+
+describe('planFolderUpload as a public API', () => {
+  it('re-validates a plan handed in from outside', async () => {
+    write('index.html', '<html>index</html>')
+
+    const plan = await planFolderUpload(folder, { cache: {} })
+    const { client, files } = stubClient()
+
+    /*
+     * The guards live in planFolderUpload, but a caller that builds its own
+     * plan must not be the reason they are skipped: a mistyped fallback would
+     * otherwise publish a manifest whose deep links all 404, after paying for
+     * every file in the folder.
+     */
+    await expect(
+      uploadFolder(client, folder, { cache: {}, fallbackFile: 'typo-404.html', plan }),
+    ).rejects.toThrow(/Fallback file not found in folder: typo-404\.html/)
+    expect(files()).toHaveLength(0)
+  })
+
+  it('keeps the cache in play when only a plan is passed', async () => {
+    write('index.html', '<html>index</html>')
+
+    const plan = await planFolderUpload(folder, { cache: {} })
+    const result = await uploadFolder(stubClient().client, folder, { plan })
+
+    // A plan always carries a cache; ignoring it silently dropped every
+    // non-incremental cache update.
+    expect(result.updatedCache).toBeDefined()
+    expect(Object.keys(result.updatedCache ?? {})).toHaveLength(1)
+  })
+
+  it('prices only what will be uploaded', async () => {
+    write('a.txt', 'x'.repeat(100))
+    write('b.txt', 'y'.repeat(250))
+
+    let cache: TransactionCache = {}
+    await uploadFolder(stubClient().client, folder, {
+      cache,
+      incremental: {
+        onCacheUpdate(updated) {
+          cache = updated
+        },
+      },
+    })
+
+    write('b.txt', 'z'.repeat(250))
+    const plan = await planFolderUpload(folder, { cache, incremental: {} })
+
+    // Only the changed file, not the 350-byte folder.
+    expect(plan.pendingBytes).toBe(250)
+    expect(plan.uploadTargets).toHaveLength(1)
+  })
+
+  it('does not stat files whose size nothing will read', async () => {
+    write('a.txt', 'x'.repeat(100))
+
+    // Outside incremental mode no plan is ever priced, and a statSync per file
+    // is a blocking syscall bought for nothing on a 10k-file folder.
+    const plan = await planFolderUpload(folder, { cache: {} })
+
+    expect(plan.tasks[0].bytes).toBe(0)
+    expect(plan.pendingBytes).toBe(0)
   })
 })
 

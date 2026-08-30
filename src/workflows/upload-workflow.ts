@@ -186,7 +186,18 @@ export function createCacheWriter(
   }
 
   const onSignal = (signal: NodeJS.Signals): void => {
-    write()
+    try {
+      write()
+    } catch {
+      /*
+       * A cache write can fail — a full disk, a read-only mount. Letting that
+       * escape a signal handler turns it into an uncaughtException: the
+       * re-raise never runs and the process exits 1 instead of by signal, so
+       * anything reading the exit status is told the wrong thing. Losing the
+       * flush is bad; lying about how the process died is worse.
+       */
+    }
+
     dispose()
     raise(signal)
   }
@@ -382,6 +393,8 @@ export async function runUploadWorkflow(
         if (requiredWinc > currentWinc) {
           spinner.fail('Insufficient Turbo credits')
 
+          // io.error throws, so nothing after it runs.
+          writer?.dispose()
           io.error(
             [
               'Insufficient Turbo credits for this upload.',
@@ -398,6 +411,7 @@ export async function runUploadWorkflow(
       spinner.fail('Failed to check Turbo credits')
       const errorMessage =
         balanceError instanceof Error ? balanceError.message : String(balanceError)
+      writer?.dispose()
       io.error(`Failed to check Turbo credits: ${errorMessage}`)
     }
   }
@@ -409,8 +423,6 @@ export async function runUploadWorkflow(
     if (config['deploy-file']) {
       const filePath = expandPath(config['deploy-file'])
       spinner.start(`Uploading file ${chalk.yellow(config['deploy-file'])}`)
-
-      writer?.dispose()
 
       if (config.incremental) {
         /*
