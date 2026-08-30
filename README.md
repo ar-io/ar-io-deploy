@@ -35,6 +35,7 @@ Your app is now permanently live at `https://myapp.ar.io`.
 - [Bundler service](#bundler-service)
 - [Command Options](#command-options)
 - [Deduplication](#deduplication)
+- [Incremental uploads](#incremental-uploads)
 - [Package.json Scripts](#packagejson-scripts)
 - [GitHub Action](#github-action)
 - [CLI in GitHub Actions](#cli-in-github-actions)
@@ -57,6 +58,7 @@ Your app is now permanently live at `https://myapp.ar.io`.
 - **Optional ArNS Updates:** Updates ArNS records via ANT with new transaction IDs
 - **Automated Workflow:** Integrates with GitHub Actions for continuous deployment
 - **Git Hash Tagging:** In CI (GitHub Actions), tags uploaded data items with the deploying commit SHA
+- **Incremental Uploads (opt-in):** `--incremental` pays only for the files that actually changed, recovering the rest from your own past uploads even on a machine with no local cache. See [Incremental uploads](#incremental-uploads).
 - **404 Fallback Detection:** Automatically sets `404.html` as the manifest fallback when present, so deep links into a single-page app resolve instead of 404ing. Override with `--fallback-file <path>` — an SPA that only builds `index.html` can point at that instead.
 - **Network Support:** ArNS updates run against the Solana ARIO programs on `mainnet` or `devnet`, with an optional custom RPC URL
 - **Flexible Deployment:** Supports deploying a folder or a single file
@@ -338,9 +340,11 @@ ArNS authority key (controls the name, signs the update — always Solana):
 - `--max-token-amount`: Maximum token amount for on-demand payment (used with `--on-demand`)
 - `--no-dedupe`: Disable deduplication (do not cache or reuse previous uploads)
 - `--dedupe-cache-max-entries`: Maximum number of entries to keep in the dedupe cache (LRU). Default: `10000`
+- `--incremental`: Reuse files already on Arweave, including from a machine with no local cache. Off by default. Cannot be combined with `--no-dedupe`. See [Incremental uploads](#incremental-uploads).
+- `--incremental-gateway`: Gateway whose GraphQL endpoint is queried for past uploads when `--incremental` is set. Default: `https://arweave.net`
 - `--uploader`: Custom Turbo upload service base URL. See the **Bundler service** section.
 
-**`upload`** (explicit upload without ArNS): accepts `--deploy-folder`, `--deploy-file`, wallet/signer flags, `--uploader`, `--on-demand` / `--max-token-amount`, and dedupe flags only.
+**`upload`** (explicit upload without ArNS): accepts `--deploy-folder`, `--deploy-file`, wallet/signer flags, `--uploader`, `--on-demand` / `--max-token-amount`, and the dedupe and incremental flags only.
 
 ## Deduplication
 
@@ -378,6 +382,37 @@ The cache file is stored at `.ario-deploy/transaction-cache.json` in your projec
 - Add it to `.gitignore` if you don't want to share cache across team members
 - Commit it to share cached transaction IDs with your team (reduces duplicate uploads)
 - Delete it to start fresh: `rm -rf .ario-deploy/`
+
+## Incremental uploads
+
+`--incremental` makes a redeploy pay only for the files that actually changed.
+
+Arweave storage is permanent, so re-uploading byte-identical files buys nothing. Build tools content-hash their output, so between two deploys of a real site only a couple of entry chunks change — everything else is already on chain and can be referenced by its existing transaction id in the path manifest.
+
+```bash
+ario-deploy deploy --wallet ./wallet.json --incremental
+```
+
+**How it works:**
+
+1. Every file in the folder is hashed (SHA-256).
+2. Each hash is looked up in the local dedupe cache, and then — for anything the cache cannot answer — among your own past uploads on chain.
+3. Only the remainder is uploaded, and each transaction id is written to the cache the moment it lands.
+4. The manifest is assembled from the remembered ids plus the new ones.
+
+**Why the on-chain lookup matters:** every uploaded file carries a `File-SHA256` tag, which makes it findable again from nothing but the bytes on disk. That is what a CI job needs. CI runs from a fresh checkout, so `.ario-deploy/transaction-cache.json` is often missing or stale even with `actions/cache` restoring it — and without the on-chain lookup every redeploy pays for the whole bundle again.
+
+**The tag invariant:** a data item's id covers its tags, so a tag whose value changes between deploys — a commit SHA above all — moves every file's id on every deploy and defeats deduplication. The failure is silent: the upload succeeds, the manifest is correct, and the bill doubles. In incremental mode files therefore carry only deploy-invariant tags (`App-Name`, `Content-Type`, `File-SHA256`), and the `GIT-HASH` provenance tag rides on the manifest instead, which is rewritten every deploy anyway. The tag set is asserted in code, so a future addition fails loudly rather than quietly costing money.
+
+**Known limitation:** gateway GraphQL indexing lags an upload by a few minutes. Two machines deploying the same _new_ file at the same moment can each pay for it. That is the accepted failure mode — it costs a fraction of a cent and never produces a wrong manifest. Equally, a gateway that is slow or unreachable costs reuse, not correctness: unresolved files are simply uploaded.
+
+**Notes:**
+
+- Off by default. Nothing changes for an existing pipeline until you pass the flag.
+- Mutually exclusive with `--no-dedupe`, which asks for the opposite.
+- Only your own wallet's past transactions are consulted. A `File-SHA256` tag is a claim anyone can stamp on any bytes; scoping the query to the uploading wallet is what makes the answer trustworthy.
+- Two files with identical bytes in the same folder are paid for once and both listed in the manifest.
+- The lookup uses `https://arweave.net/graphql` by default; override it with `--incremental-gateway`.
 
 ## Package.json Scripts
 
@@ -555,6 +590,19 @@ You can also limit the cache size:
     deploy-key: ${{ secrets.DEPLOY_KEY }}
     deploy-folder: ./dist
     dedupe-cache-max-entries: '1000'
+```
+
+### Incremental Uploads
+
+A CI job runs from a fresh checkout, so the restored transaction cache is often missing or stale — and then every redeploy pays for the whole bundle again. `incremental: 'true'` recovers those transaction ids from your wallet's own past uploads on chain, so only the files that actually changed are paid for. See [Incremental uploads](#incremental-uploads).
+
+```yaml
+- name: Deploy only what changed
+  uses: ar-io/ar-io-deploy@v1.0.0
+  with:
+    deploy-key: ${{ secrets.DEPLOY_KEY }}
+    deploy-folder: ./dist
+    incremental: 'true'
 ```
 
 ---

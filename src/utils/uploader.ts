@@ -5,6 +5,7 @@ import { OnDemandFunding } from '@ardrive/turbo-sdk'
 import * as mime from 'mime-types'
 import pLimit from 'p-limit'
 
+import { APP_NAME, FILE_HASH_TAG } from '../constants/incremental.js'
 import {
   getAllFiles,
   getCachedTransaction,
@@ -13,9 +14,13 @@ import {
   touchCacheEntry,
   type TransactionCache,
 } from './cache.js'
+import {
+  assertDeployInvariantTags,
+  type ChainIndex,
+  type DataItemTag,
+  isArweaveId,
+} from './incremental.js'
 import type { UploadClient, UploadCost, UploadSize } from './upload-types.js'
-
-type DataItemTag = { name: string; value: string }
 
 /**
  * Provenance tags stamped on every uploaded data item. In CI (GitHub Actions)
@@ -23,12 +28,58 @@ type DataItemTag = { name: string; value: string }
  * GITHUB_SHA is unset, it is omitted.
  */
 export function provenanceTags(): DataItemTag[] {
-  const tags: DataItemTag[] = [{ name: 'App-Name', value: 'ARIO-Deploy' }]
+  const tags: DataItemTag[] = [{ name: 'App-Name', value: APP_NAME }]
   if (process.env.GITHUB_SHA) {
     tags.push({ name: 'GIT-HASH', value: process.env.GITHUB_SHA })
   }
 
   return tags
+}
+
+/**
+ * Tags for one file in incremental mode.
+ *
+ * Deliberately *not* `provenanceTags()`: a data item's id covers its tags, so
+ * the commit SHA that changes every deploy would move every file's id and
+ * defeat deduplication — silently, since the upload still succeeds and only
+ * the bill notices. Provenance still rides on the manifest, which is rewritten
+ * every deploy regardless.
+ *
+ * `assertDeployInvariantTags` guards the set on every call, so a future tag
+ * added here fails loudly instead of doubling users' costs.
+ *
+ * @param contentHash - SHA-256 of the file, published so a later run can find
+ *   this upload again with no local state.
+ * @param mimeType - Content type served for the file.
+ * @returns The deploy-invariant tag set for the file.
+ */
+export function incrementalFileTags(contentHash: string, mimeType: string): DataItemTag[] {
+  const tags: DataItemTag[] = [
+    { name: 'App-Name', value: APP_NAME },
+    { name: 'Content-Type', value: mimeType },
+    { name: FILE_HASH_TAG, value: contentHash },
+  ]
+
+  assertDeployInvariantTags(tags)
+
+  return tags
+}
+
+export interface IncrementalOptions {
+  /**
+   * Chain-backed index consulted for hashes the local cache does not know.
+   * Omitted (or failing) simply means fewer reuses, never a wrong manifest.
+   */
+  index?: ChainIndex
+  /**
+   * Called with the updated cache after every single upload.
+   *
+   * An upload that is paid for but forgotten is money burnt, and a deploy
+   * killed part-way through is the normal case, not the exceptional one.
+   */
+  onCacheUpdate?: (cache: TransactionCache) => void
+  /** Surfaced when the chain index cannot be reached. */
+  onWarning?: (message: string) => void
 }
 
 export interface UploadResult {
@@ -150,11 +201,19 @@ export async function uploadFolder(
      */
     fallbackFile?: string
     fundingMode?: OnDemandFunding
+    /**
+     * Opt in to content-hash incremental uploads: publish each file's hash as
+     * a tag, recover ids the local cache is missing from the chain, and
+     * persist every id the instant it lands. Omitted, the folder uploads
+     * exactly as it always has.
+     */
+    incremental?: IncrementalOptions
     throwOnFailure?: boolean
   },
 ): Promise<FolderUploadResult> {
   const concurrency = options?.concurrency ?? DEFAULT_UPLOAD_CONCURRENCY
   const useCache = options?.cache !== undefined
+  const incremental = options?.incremental
 
   // Get all files in the folder
   const relativePaths = getAllFiles(folderPath)
@@ -175,11 +234,16 @@ export async function uploadFolder(
     )
   }
 
-  // Prepare file tasks with hashes (if caching is enabled)
+  /*
+   * Hash every file when the local cache is in play, and always in incremental
+   * mode — there the hash is not just a cache key, it is published as a tag so
+   * a later run with no local state can find this upload again.
+   */
+  const needHashes = useCache || incremental !== undefined
   const tasks: FileUploadTask[] = await Promise.all(
     relativePaths.map(async (relativePath) => {
       const fullPath = path.join(folderPath, relativePath)
-      const hash = useCache ? await hashFile(fullPath) : ''
+      const hash = needHashes ? await hashFile(fullPath) : ''
       return { fullPath, hash, relativePath }
     }),
   )
@@ -199,21 +263,66 @@ export async function uploadFolder(
     }
   }
 
+  /*
+   * Chain-backed lookup for whatever the local cache could not answer. This is
+   * the layer that matters in CI, where a fresh checkout has no cache file at
+   * all and every redeploy would otherwise pay for the whole bundle again.
+   *
+   * A gateway that is unreachable, slow or lagging behind costs reuse, never
+   * correctness: unresolved hashes simply get uploaded.
+   */
+  if (incremental?.index) {
+    const unknown = [...new Set(tasks.filter((t) => !t.cached && t.hash).map((t) => t.hash))]
+
+    if (unknown.length > 0) {
+      try {
+        const found = await incremental.index.resolve(unknown)
+        let recovered = 0
+
+        for (const task of tasks) {
+          const id = task.cached ? undefined : found[task.hash]
+          if (isArweaveId(id)) {
+            task.cached = { transactionId: id }
+            cache = setCachedTransaction(cache, task.hash, id)
+            cacheHits++
+            recovered++
+          }
+        }
+
+        if (recovered > 0) {
+          incremental.onCacheUpdate?.(cache)
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        incremental.onWarning?.(`Could not read past uploads from the gateway: ${message}`)
+      }
+    }
+  }
+
   // If all files are cached, we still need to build and upload a new manifest
   // (because the manifest itself has a unique transaction ID each time)
   const uncachedTasks = tasks.filter((t) => !t.cached)
+
+  /*
+   * Two files with identical bytes share a single upload in incremental mode:
+   * the hash, not the path, is what is being paid for. Outside it the historic
+   * one-upload-per-file behaviour is left exactly as it was.
+   */
+  const uploadTargets = incremental ? dedupeTasksByHash(uncachedTasks) : uncachedTasks
 
   // Upload uncached files with concurrency control using p-limit
   const limit = pLimit(concurrency)
 
   const uploadResults = await Promise.all(
-    uncachedTasks.map((task) =>
+    uploadTargets.map((task) =>
       limit(async () => {
         const mimeType = mime.lookup(task.fullPath) || 'application/octet-stream'
 
         const uploadResult = await turbo.uploadFile({
           dataItemOpts: {
-            tags: [...provenanceTags(), { name: 'Content-Type', value: mimeType }],
+            tags: incremental
+              ? incrementalFileTags(task.hash, mimeType)
+              : [...provenanceTags(), { name: 'Content-Type', value: mimeType }],
           },
           file: task.fullPath,
           ...(options?.fundingMode && { fundingMode: options.fundingMode }),
@@ -227,15 +336,43 @@ export async function uploadFolder(
           return { hash: task.hash, task, transactionId: null }
         }
 
+        /*
+         * Record the id before anything else can fail. A deploy killed
+         * part-way through is the normal case, not the exceptional one, and an
+         * upload that is paid for but forgotten is money burnt. Assignment and
+         * read are not separated by an await, so the concurrent workers cannot
+         * lose each other's writes.
+         */
+        if (incremental && task.hash) {
+          cache = setCachedTransaction(cache, task.hash, uploadResult.id)
+          incremental.onCacheUpdate?.(cache)
+        }
+
         return { hash: task.hash, task, transactionId: uploadResult.id }
       }),
     ),
   )
 
   // Update cache with all successful uploads (done sequentially to avoid race conditions)
-  for (const result of uploadResults) {
-    if (useCache && result.hash && result.transactionId) {
-      cache = setCachedTransaction(cache, result.hash, result.transactionId)
+  if (!incremental) {
+    for (const result of uploadResults) {
+      if (useCache && result.hash && result.transactionId) {
+        cache = setCachedTransaction(cache, result.hash, result.transactionId)
+      }
+    }
+  }
+
+  // Point the files that shared an upload at the id it produced
+  if (incremental) {
+    for (const task of uncachedTasks) {
+      if (task.cached || !task.hash) {
+        continue
+      }
+
+      const id = getCachedTransaction(cache, task.hash)?.transactionId
+      if (isArweaveId(id)) {
+        task.cached = { transactionId: id }
+      }
     }
   }
 
@@ -325,7 +462,26 @@ export async function uploadFolder(
     cacheHits,
     totalFiles: tasks.length,
     transactionId: manifestUploadResult.id,
-    updatedCache: useCache ? cache : undefined,
-    uploaded: uncachedTasks.length - failedUploads.length,
+    updatedCache: useCache || incremental ? cache : undefined,
+    uploaded: uploadTargets.length - failedUploads.length,
   }
+}
+
+/**
+ * One task per distinct content hash, keeping the first occurrence.
+ *
+ * @param tasks - Tasks that still need uploading.
+ * @returns The subset that must actually be paid for.
+ */
+function dedupeTasksByHash(tasks: FileUploadTask[]): FileUploadTask[] {
+  const seen = new Set<string>()
+
+  return tasks.filter((task) => {
+    if (!task.hash || seen.has(task.hash)) {
+      return !task.hash
+    }
+
+    seen.add(task.hash)
+    return true
+  })
 }

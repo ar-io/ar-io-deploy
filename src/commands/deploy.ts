@@ -29,6 +29,7 @@ export default class Deploy extends Command {
   static override examples = [
     '<%= config.bin %> deploy --wallet ./wallet.json',
     '<%= config.bin %> deploy --wallet ./wallet.json --deploy-folder ./dist',
+    '<%= config.bin %> deploy --wallet ./wallet.json --deploy-folder ./dist --incremental',
     '<%= config.bin %> deploy --wallet ./wallet.json --deploy-file ./dist/index.html',
     '<%= config.bin %> deploy --wallet ./wallet.json --use-arns --arns-name my-app --arns-wallet ./arns-id.json',
     '<%= config.bin %> deploy --wallet ./wallet.json --use-arns --arns-name my-app --arns-wallet ./arns-id.json --undername staging',
@@ -156,6 +157,8 @@ export default class Deploy extends Command {
         'deploy-file': baseConfig['deploy-file'],
         'deploy-folder': baseConfig['deploy-folder'],
         'fallback-file': baseConfig['fallback-file'],
+        incremental: baseConfig.incremental,
+        'incremental-gateway': baseConfig['incremental-gateway'],
         'max-token-amount': advancedOptions?.maxTokenAmount || baseConfig['max-token-amount'],
         'no-dedupe': baseConfig['no-dedupe'],
         'on-demand': advancedOptions?.onDemand || baseConfig['on-demand'],

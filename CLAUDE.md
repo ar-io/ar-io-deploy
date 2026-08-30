@@ -45,6 +45,12 @@ All CLI flags are defined in `src/constants/flags.ts` as a single source of trut
 
 Located at `.ario-deploy/transaction-cache.json` (relative to cwd). Maps SHA-256 file hashes to `{transactionId, createdAtTimestamp, lastUsedTimestamp}`. LRU eviction at configurable max entries (default 10,000). Disable with `--no-dedupe`.
 
+### Incremental Uploads (`--incremental`, opt-in)
+
+`src/utils/incremental.ts` adds the two things the local cache cannot do: a `File-SHA256` tag on every uploaded file, and a chain-backed index (`createChainIndex`) that rebuilds hash -> transaction id by querying the uploader's own past items over GraphQL. That index is what makes a fresh CI checkout cheap. Ids are written to the cache after every single upload rather than at the end of the run.
+
+**Invariant:** identical bytes must produce identical per-file tags. A data item's id covers its tags, so any per-deploy tag on a file (the commit SHA above all) moves every id and silently doubles the bill. `incrementalFileTags()` therefore stamps only `App-Name`, `Content-Type` and `File-SHA256`, guarded by `assertDeployInvariantTags`; `GIT-HASH` goes on the manifest instead.
+
 ### Signer Types
 
 `src/utils/signer.ts` creates signers: Arweave (base64 JWK -> ArweaveSigner), Ethereum/Polygon/KYVE (hex key -> EthereumSigner), Solana (base58 key -> HexSolanaSigner). Only Solana signers can update ArNS records.

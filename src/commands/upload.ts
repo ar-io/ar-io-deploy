@@ -25,6 +25,7 @@ export default class Upload extends Command {
   static override examples = [
     '<%= config.bin %> upload --wallet ./wallet.json',
     '<%= config.bin %> upload --wallet ./wallet.json --deploy-folder ./dist',
+    '<%= config.bin %> upload --wallet ./wallet.json --deploy-folder ./dist --incremental',
     '<%= config.bin %> upload --wallet ./wallet.json --deploy-file ./dist/index.html',
     '<%= config.bin %> upload --private-key "$(cat wallet.json)" --on-demand ario --max-token-amount 1.5',
     '<%= config.bin %> upload --wallet ./wallet.json --uploader https://turbo.ardrive.io',
@@ -73,6 +74,8 @@ export default class Upload extends Command {
         'deploy-file': baseConfig['deploy-file'],
         'deploy-folder': baseConfig['deploy-folder'],
         'fallback-file': baseConfig['fallback-file'],
+        incremental: baseConfig.incremental,
+        'incremental-gateway': baseConfig['incremental-gateway'],
         'max-token-amount': baseConfig['max-token-amount'],
         'on-demand': baseConfig['on-demand'],
         'sig-type': baseConfig['sig-type'],

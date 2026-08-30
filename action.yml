@@ -68,6 +68,13 @@ inputs:
   dedupe-cache-max-entries:
     description: 'Maximum number of entries to keep in the dedupe cache (LRU). Default is 10000.'
     required: false
+  incremental:
+    description: "Reuse files already on Arweave. Publishes each file's content hash as a tag and recovers transaction ids the restored cache is missing by querying this wallet's past uploads, so a redeploy pays only for the files that actually changed. Off by default."
+    required: false
+    default: 'false'
+  incremental-gateway:
+    description: 'Gateway whose GraphQL endpoint is queried for past uploads when incremental is enabled. Defaults to https://arweave.net.'
+    required: false
 
 outputs:
   tx-id:
@@ -204,8 +211,19 @@ runs:
         # Add dedupe options
         if [[ "${{ inputs.no-dedupe }}" == "true" ]]; then
           ARGS="$ARGS --no-dedupe"
-        elif [[ -n "${{ inputs.dedupe-cache-max-entries }}" ]]; then
-          ARGS="$ARGS --dedupe-cache-max-entries ${{ inputs.dedupe-cache-max-entries }}"
+        else
+          if [[ -n "${{ inputs.dedupe-cache-max-entries }}" ]]; then
+            ARGS="$ARGS --dedupe-cache-max-entries ${{ inputs.dedupe-cache-max-entries }}"
+          fi
+
+          # Incremental uploads recover ids from the chain, which is what makes
+          # a restored-but-stale (or missing) cache cheap instead of expensive.
+          if [[ "${{ inputs.incremental }}" == "true" ]]; then
+            ARGS="$ARGS --incremental"
+            if [[ -n "${{ inputs.incremental-gateway }}" ]]; then
+              ARGS="$ARGS --incremental-gateway ${{ inputs.incremental-gateway }}"
+            fi
+          fi
         fi
 
         echo "Running: ario-deploy deploy $ARGS"

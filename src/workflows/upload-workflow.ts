@@ -10,13 +10,20 @@ import {
 } from '@ardrive/turbo-sdk'
 import ora from 'ora'
 
+import { APP_NAME, DEFAULT_INCREMENTAL_GATEWAY } from '../constants/incremental.js'
 import type { SignerType } from '../types/index.js'
-import { cleanupCache, loadCache, saveCache } from '../utils/cache.js'
+import { cleanupCache, loadCache, saveCache, type TransactionCache } from '../utils/cache.js'
 import { chalk } from '../utils/chalk.js'
+import { type ChainIndex, createChainIndex } from '../utils/incremental.js'
 import { expandPath } from '../utils/path.js'
 import { createSigner } from '../utils/signer.js'
 import type { UploadClient, UploadCost, UploadSize } from '../utils/upload-types.js'
-import { type FolderUploadResult, uploadFile, uploadFolder } from '../utils/uploader.js'
+import {
+  type FolderUploadResult,
+  type IncrementalOptions,
+  uploadFile,
+  uploadFolder,
+} from '../utils/uploader.js'
 
 export interface UploadWorkflowConfig {
   'dedupe-cache-max-entries': number
@@ -24,6 +31,10 @@ export interface UploadWorkflowConfig {
   'deploy-folder': string
   /** Relative path served for routes the manifest does not list. */
   'fallback-file'?: string
+  /** Opt in to content-hash incremental uploads. */
+  incremental?: boolean
+  /** Gateway whose GraphQL endpoint answers "have I uploaded these bytes?". */
+  'incremental-gateway'?: string
   'max-token-amount'?: string
   'on-demand'?: string
   'sig-type': string
@@ -45,6 +56,45 @@ function getFolderSize(folderPath: string): number {
 
 export interface UploadWorkflowIo {
   error: (msg: string) => never
+}
+
+/**
+ * Build the chain-backed index, or explain why there is none.
+ *
+ * The index is keyed on the uploader's own native address: a `File-SHA256`
+ * tag is a claim anyone can stamp on any bytes, so only the wallet's own past
+ * transactions are trusted to answer "have I already paid for this file?".
+ *
+ * A wallet whose address cannot be determined is not fatal — the deploy falls
+ * back to the local cache alone and uploads what it cannot account for.
+ *
+ * @param client - Authenticated upload client.
+ * @param config - Workflow config carrying the gateway to sweep.
+ * @param onWarning - Reports a degraded, still-correct run.
+ * @returns The index, or undefined when the owner address is unavailable.
+ */
+async function createIncrementalIndex(
+  client: UploadClient,
+  config: UploadWorkflowConfig,
+  onWarning: (message: string) => void,
+): Promise<ChainIndex | undefined> {
+  try {
+    const owner = await client.signer?.getNativeAddress()
+    if (!owner) {
+      onWarning('Incremental uploads: no wallet address available, using the local cache only')
+      return undefined
+    }
+
+    return createChainIndex({
+      appName: APP_NAME,
+      gatewayUrl: config['incremental-gateway'] ?? DEFAULT_INCREMENTAL_GATEWAY,
+      owner,
+    })
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    onWarning(`Incremental uploads: could not determine the wallet address (${message})`)
+    return undefined
+  }
 }
 
 export interface UploadWorkflowResult {
@@ -196,10 +246,37 @@ export async function runUploadWorkflow(
       spinner.start(`Uploading folder ${chalk.yellow(config['deploy-folder'])}`)
 
       let cache = config['dedupe-cache-max-entries'] > 0 ? loadCache() : {}
+
+      /*
+       * Persist every id the moment it lands rather than only at the end of
+       * the run. A deploy killed part-way through is the normal case, and an
+       * upload that was paid for but forgotten has to be paid for again.
+       */
+      const persist = (updated: TransactionCache): void => {
+        if (config['dedupe-cache-max-entries'] > 0) {
+          saveCache(cleanupCache(updated, config['dedupe-cache-max-entries']))
+        }
+      }
+
+      const incremental: IncrementalOptions | undefined = config.incremental
+        ? {
+            index: await createIncrementalIndex(uploadClient, config, (message) => {
+              spinner.warn(message)
+            }),
+            onCacheUpdate: persist,
+            onWarning: (message) => spinner.warn(message),
+          }
+        : undefined
+
+      if (incremental) {
+        spinner.start(`Uploading folder ${chalk.yellow(config['deploy-folder'])}`)
+      }
+
       const uploadResult: FolderUploadResult = await uploadFolder(uploadClient, folderPath, {
         cache,
         fallbackFile: config['fallback-file'],
         fundingMode,
+        incremental,
         throwOnFailure: true,
       })
 

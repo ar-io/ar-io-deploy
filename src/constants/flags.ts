@@ -12,6 +12,7 @@ import {
   validateUndername,
 } from '../utils/validators.js'
 import { DEFAULT_CACHE_MAX_ENTRIES } from './cache.js'
+import { DEFAULT_INCREMENTAL_GATEWAY } from './incremental.js'
 
 /**
  * Global flag definitions - single source of truth for all flags
@@ -112,6 +113,23 @@ export const globalFlags = {
     flag: Flags.string({
       description:
         'Path (relative to the deploy folder) served for routes the manifest does not list. Defaults to 404.html when present.',
+      required: false,
+    }),
+  }),
+  incremental: createFlagConfig<boolean>({
+    flag: Flags.boolean({
+      default: false,
+      description:
+        'Reuse files already on Arweave: tag each file with its content hash, recover transaction ids the local cache is missing by querying your own past uploads, and record every id the moment it lands. Off by default.',
+      exclusive: ['no-dedupe'],
+      required: false,
+    }),
+  }),
+  incrementalGateway: createFlagConfig<string>({
+    flag: Flags.string({
+      default: DEFAULT_INCREMENTAL_GATEWAY,
+      description:
+        'Gateway whose GraphQL endpoint is queried for past uploads when --incremental is set.',
       required: false,
     }),
   }),
@@ -238,6 +256,8 @@ export const deployFlags = {
   'deploy-file': globalFlags.deployFile.flag,
   'deploy-folder': globalFlags.deployFolder.flag,
   'fallback-file': globalFlags.fallbackFile.flag,
+  incremental: globalFlags.incremental.flag,
+  'incremental-gateway': globalFlags.incrementalGateway.flag,
   'max-token-amount': globalFlags.maxTokenAmount.flag,
   'no-dedupe': globalFlags.noDedupe.flag,
   'on-demand': globalFlags.onDemand.flag,
@@ -285,6 +305,8 @@ export interface DeployConfig {
   'deploy-file'?: string
   'deploy-folder': string
   'fallback-file'?: string
+  incremental: boolean
+  'incremental-gateway': string
   'max-token-amount'?: string
   'no-dedupe': boolean
   'on-demand'?: string
@@ -311,6 +333,8 @@ export const deployFlagConfigs = {
   'deploy-file': globalFlags.deployFile,
   'deploy-folder': globalFlags.deployFolder,
   'fallback-file': globalFlags.fallbackFile,
+  incremental: globalFlags.incremental,
+  'incremental-gateway': globalFlags.incrementalGateway,
   'max-token-amount': globalFlags.maxTokenAmount,
   'no-dedupe': globalFlags.noDedupe,
   'on-demand': globalFlags.onDemand,
@@ -332,6 +356,8 @@ export const uploadFlagConfigs = {
   'deploy-file': globalFlags.deployFile,
   'deploy-folder': globalFlags.deployFolder,
   'fallback-file': globalFlags.fallbackFile,
+  incremental: globalFlags.incremental,
+  'incremental-gateway': globalFlags.incrementalGateway,
   'max-token-amount': globalFlags.maxTokenAmount,
   'no-dedupe': globalFlags.noDedupe,
   'on-demand': globalFlags.onDemand,
