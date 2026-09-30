@@ -73,7 +73,7 @@ inputs:
     required: false
     default: 'false'
   incremental-gateway:
-    description: 'Gateway whose GraphQL endpoint is queried for past uploads when incremental is enabled. Defaults to https://arweave.net.'
+    description: 'Gateway whose GraphQL endpoint is queried for past uploads when incremental is enabled. Defaults to https://turbo-gateway.com, where Turbo uploads are indexed first.'
     required: false
   compress:
     description: 'Compress files before upload and tag them with Content-Encoding: gzip, br, or none. Gateways serve the encoded bytes to every client, so prefer gzip unless you know your clients accept br. Images, fonts, video and archives are uploaded as-is.'

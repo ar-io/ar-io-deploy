@@ -342,7 +342,7 @@ ArNS authority key (controls the name, signs the update — always Solana):
 - `--no-dedupe`: Disable deduplication (do not cache or reuse previous uploads)
 - `--dedupe-cache-max-entries`: Maximum number of entries to keep in the dedupe cache (LRU). Default: `10000`
 - `--incremental`: Reuse files already on Arweave, including on a machine with no local cache. Off by default. Cannot be combined with `--no-dedupe` or `--dedupe-cache-max-entries 0`. See [Incremental uploads](#incremental-uploads).
-- `--incremental-gateway`: Gateway whose GraphQL endpoint is queried for past uploads when `--incremental` is set. Default: `https://arweave.net`
+- `--incremental-gateway`: Gateway whose GraphQL endpoint is queried for past uploads when `--incremental` is set. Default: `https://turbo-gateway.com`
 - `--compress`: Compress files before upload and tag them with `Content-Encoding`. Choices: `gzip`, `br`, `none` (default). See [Compression](#compression).
 - `--compress-exclude`: Comma-separated globs of files to upload uncompressed, e.g. `"llms*.txt,*.md"`
 - `--uploader`: Custom Turbo upload service base URL. See the **Bundler service** section.
@@ -416,10 +416,10 @@ ario-deploy deploy --wallet ./wallet.json --incremental
 
 **Limits and caveats:**
 
-- **Recovery is capped at 2,000 files per deploy** (20 GraphQL pages of 100). Anything past that is uploaded rather than reused; nothing is ever wrong, only unreused.
+- **Lookups are batched.** Hashes are sent 100 per GraphQL request, because gateways cap the size of a query (an ar.io gateway refuses ~1,100 hashes with "Max query size exceeded"). A site of any size is covered; each batch is paged until its files are accounted for, up to 20 pages.
 - **The credits pre-flight prices only what will be sent**: the files still to upload plus an estimate of the manifest, which is uploaded on every deploy. A fully reused redeploy is priced at the manifest alone.
 - **Gateway GraphQL indexing lags an upload by a few minutes.** Two machines deploying the same _new_ file at the same moment can each pay for it. It costs a fraction of a cent and never produces a wrong manifest.
-- **A gateway that is slow, unreachable or erroring costs reuse, not correctness.** Unresolved files are simply uploaded, and the run says so.
+- **A gateway that is slow, unreachable or erroring costs reuse, not correctness.** Requests that fail transiently (HTTP 429 or 5xx, a timeout, a network error) are retried twice with a short backoff. A batch that still fails costs only its own files, which are uploaded again, and the run says how many batches it could not look up. If no batch can be looked up at all, the run warns and uploads everything.
 - **A doomed deploy takes longer to say so.** Every queued upload settles before a failure is reported, so a systemic failure (bad credentials, exhausted credits) on a very large folder surfaces at the end rather than immediately. The same uploads were always attempted, so the bill is unchanged; the alternative stranded ids that had been paid for and never written down.
 - **Ignored for `--deploy-file`.** Reuse works through the manifest, and a single file has no manifest. The run warns rather than silently doing nothing.
 - **Cache entries are keyed differently in each mode**, so a project that toggles `--incremental` on and off stores up to two entries per file against the shared `--dedupe-cache-max-entries` cap: `<sha256>` (or `gzip:<sha256>` when compressed) without it, and `<sha256>|<mime-type>` (or `<sha256>|<mime-type>|gzip`) with it.
@@ -429,7 +429,7 @@ ario-deploy deploy --wallet ./wallet.json --incremental
 - Off by default. Nothing changes for an existing pipeline until you pass the flag.
 - Refused alongside `--no-dedupe` or `--dedupe-cache-max-entries 0`, which ask for the opposite.
 - Works with `--compress`: each file's `File-SHA256` is the hash of the file on disk, and a compressed upload also carries `Content-Encoding`, so a lookup only ever reuses an upload made with the same encoding. Turning compression on or off uploads each file once more, then reuse resumes.
-- The lookup uses `https://arweave.net/graphql` by default; override it with `--incremental-gateway`.
+- The lookup uses `https://turbo-gateway.com/graphql` by default, where uploads made through Turbo are indexed within minutes (typically about five), before they are bundled into a block. Override it with `--incremental-gateway` — for example when uploading through another bundler with `--uploader`.
 
 ## Compression
 

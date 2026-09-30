@@ -10,18 +10,40 @@ export const APP_NAME = 'ARIO-Deploy'
  */
 export const FILE_HASH_TAG = 'File-SHA256'
 
-/** Gateway whose GraphQL endpoint the chain-backed index sweeps by default. */
-export const DEFAULT_INCREMENTAL_GATEWAY = 'https://arweave.net'
+/**
+ * Gateway whose GraphQL endpoint the chain-backed index sweeps by default.
+ *
+ * Turbo's own gateway: uploads made through Turbo (this CLI's default
+ * uploader) are indexed there within minutes, before they are even bundled
+ * into a block. arweave.net rate-limits GraphQL bursts with HTTP 429.
+ * Point `--incremental-gateway` elsewhere when uploading through another
+ * bundler.
+ */
+export const DEFAULT_INCREMENTAL_GATEWAY = 'https://turbo-gateway.com'
 
 /** Transactions requested per GraphQL page. */
 export const CHAIN_INDEX_PAGE_SIZE = 100
 
 /**
- * Pages the sweep will walk before giving up. The query filters on the hashes
- * this run actually needs, so a long deploy history costs nothing — this is a
- * bound on a pathological response, not a normal one.
+ * Content hashes sent per GraphQL request. Gateways cap the size of a query:
+ * an ar.io gateway answers ~1,100 hashes with "Max query size exceeded", so a
+ * large site is looked up in batches. 100 keeps each query small and each
+ * batch usually to one page.
+ */
+export const CHAIN_INDEX_HASH_BATCH = 100
+
+/**
+ * Pages walked per batch before giving up on it. A batch needs more than one
+ * page only when its files were uploaded several times, so this bounds a
+ * pathological response, not a normal one.
  */
 export const CHAIN_INDEX_MAX_PAGES = 20
+
+/**
+ * Waits before retrying a request that failed transiently (HTTP 429 or 5xx, a
+ * timeout, a network error): three attempts in all.
+ */
+export const CHAIN_INDEX_RETRY_DELAYS_MS = [500, 1500]
 
 /** Abort a GraphQL request that has not answered in this long. */
 export const CHAIN_INDEX_TIMEOUT_MS = 30_000

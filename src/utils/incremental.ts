@@ -32,8 +32,10 @@
 import crypto from 'node:crypto'
 
 import {
+  CHAIN_INDEX_HASH_BATCH,
   CHAIN_INDEX_MAX_PAGES,
   CHAIN_INDEX_PAGE_SIZE,
+  CHAIN_INDEX_RETRY_DELAYS_MS,
   CHAIN_INDEX_TIMEOUT_MS,
   DEPLOY_VARYING_TAG_NAMES,
   FILE_HASH_TAG,
@@ -172,7 +174,13 @@ export interface ChainIndexOptions {
   fetchImpl?: typeof fetch
   /** Gateway whose `/graphql` endpoint is swept. */
   gatewayUrl: string
-  /** Bound on pages walked before giving up. */
+  /**
+   * Content hashes sent per request. Gateways cap the size of a query (an
+   * ar.io gateway refuses ~1,100 hashes with "Max query size exceeded"), so a
+   * large site is looked up in batches.
+   */
+  hashBatchSize?: number
+  /** Bound on pages walked per batch before giving up on it. */
   maxPages?: number
   /** Reports answers that had to be discarded. */
   onWarning?: (message: string) => void
@@ -183,6 +191,11 @@ export interface ChainIndexOptions {
   owner: string
   /** Transactions requested per page. */
   pageSize?: number
+  /**
+   * Waits before each retry of a request that failed transiently (HTTP 429 or
+   * 5xx, a timeout, a network error). One retry per entry.
+   */
+  retryDelaysMs?: number[]
   /** Abort a request that has not answered in this long. */
   timeoutMs?: number
 }
@@ -246,10 +259,12 @@ export function createChainIndex(options: ChainIndexOptions): ChainIndex {
     appName,
     fetchImpl = fetch,
     gatewayUrl,
+    hashBatchSize = CHAIN_INDEX_HASH_BATCH,
     maxPages = CHAIN_INDEX_MAX_PAGES,
     onWarning,
     owner,
     pageSize = CHAIN_INDEX_PAGE_SIZE,
+    retryDelaysMs = CHAIN_INDEX_RETRY_DELAYS_MS,
     timeoutMs = CHAIN_INDEX_TIMEOUT_MS,
   } = options
 
@@ -294,74 +309,140 @@ export function createChainIndex(options: ChainIndexOptions): ChainIndex {
 
       const found: Record<string, string> = {}
       const hashes = [...new Set([...wanted.values()].map((file) => file.hash))]
-      let cursor: null | string = null
       let rejected = 0
+      let failedBatches = 0
+      let lastError: unknown
 
-      for (let page = 0; page < maxPages && Object.keys(found).length < wanted.size; page++) {
-        const response = await fetchImpl(endpoint, {
-          body: JSON.stringify({ query, variables: { after: cursor, hashes, owner } }),
-          headers: { 'content-type': 'application/json' },
-          method: 'POST',
-          signal: AbortSignal.timeout(timeoutMs),
-        })
+      type Transactions = NonNullable<NonNullable<GraphQlResponse['data']>['transactions']>
 
-        if (!response.ok) {
-          throw new Error(`GraphQL request to ${endpoint} failed with status ${response.status}`)
-        }
+      /** One page of one batch, retried on transient failures. */
+      const fetchPage = async (batch: string[], after: null | string): Promise<Transactions> => {
+        for (let attempt = 0; ; attempt++) {
+          let transient: Error
+          try {
+            const response = await fetchImpl(endpoint, {
+              body: JSON.stringify({ query, variables: { after, hashes: batch, owner } }),
+              headers: { 'content-type': 'application/json' },
+              method: 'POST',
+              signal: AbortSignal.timeout(timeoutMs),
+            })
 
-        const body = (await response.json()) as GraphQlResponse
-        const transactions = body?.data?.transactions
-        if (!transactions) {
-          throw new Error(
-            `GraphQL request to ${endpoint} returned no transactions: ${JSON.stringify(
-              body?.errors ?? body,
-            )}`,
-          )
-        }
+            if (response.ok) {
+              const body = (await response.json()) as GraphQlResponse
+              const transactions = body?.data?.transactions
+              if (!transactions) {
+                throw new Error(
+                  `GraphQL request to ${endpoint} returned no transactions: ${JSON.stringify(
+                    body?.errors ?? body,
+                  )}`,
+                )
+              }
 
-        const edges = transactions.edges ?? []
-        for (const edge of edges) {
-          cursor = edge.cursor ?? cursor
+              return transactions
+            }
 
-          const id = edge.node?.id
-          const tags = edge.node?.tags ?? []
-          const hash = tags.find((tag) => tag.name === FILE_HASH_TAG)?.value
-          const contentType = tags.find((tag) => tag.name === 'Content-Type')?.value
-          // Absent on uncompressed uploads, which is exactly what the key needs.
-          const encoding = tags.find((tag) => tag.name === 'Content-Encoding')?.value
-
-          if (!isArweaveId(id) || !isContentHash(hash) || contentType === undefined) {
-            continue
+            const error = new Error(
+              `GraphQL request to ${endpoint} failed with status ${response.status}`,
+            )
+            // A 4xx other than 429 will not get better by asking again.
+            if (response.status !== 429 && response.status < 500) throw error
+            transient = error
+          } catch (error) {
+            // A GraphQL-level error is deterministic for this query; only
+            // network failures and timeouts are worth another attempt.
+            const isNetwork =
+              error instanceof TypeError ||
+              (error instanceof Error &&
+                (error.name === 'TimeoutError' || error.name === 'AbortError'))
+            if (!isNetwork) throw error
+            transient = error as Error
           }
 
-          /*
-           * Never take the server's word for its own filter. A hostile or
-           * buggy gateway returning somebody else's id would put it in the
-           * manifest and in the cache, breaking every future deploy too.
-           */
-          if (edge.node?.owner?.address !== owner) {
-            rejected++
-            continue
-          }
-
-          const key = incrementalCacheKey(hash, contentType, encoding)
-          /*
-           * Newest first, and any upload of these exact bytes under this exact
-           * type is equally valid, so the first sighting wins and there is
-           * nothing to reconcile.
-           */
-          if (wanted.has(key) && !found[key]) {
-            found[key] = id
-          }
+          if (attempt >= retryDelaysMs.length) throw transient
+          await new Promise((resolve) => {
+            setTimeout(resolve, retryDelaysMs[attempt])
+          })
         }
+      }
 
-        if (!transactions.pageInfo?.hasNextPage || edges.length === 0) {
-          break
+      /*
+       * Batches bound the size of each query; paging within a batch covers a
+       * hash uploaded more than once. A batch that still fails after retries
+       * costs only its own files -- the others are still reused.
+       */
+      for (let start = 0; start < hashes.length; start += hashBatchSize) {
+        const batch = new Set(hashes.slice(start, start + hashBatchSize))
+        const batchKeys = [...wanted.entries()]
+          .filter(([, file]) => batch.has(file.hash))
+          .map(([key]) => key)
+        let cursor: null | string = null
+
+        try {
+          for (let page = 0; page < maxPages; page++) {
+            if (batchKeys.every((key) => found[key])) break
+
+            const transactions = await fetchPage([...batch], cursor)
+            const edges = transactions.edges ?? []
+            for (const edge of edges) {
+              cursor = edge.cursor ?? cursor
+
+              const id = edge.node?.id
+              const tags = edge.node?.tags ?? []
+              const hash = tags.find((tag) => tag.name === FILE_HASH_TAG)?.value
+              const contentType = tags.find((tag) => tag.name === 'Content-Type')?.value
+              // Absent on uncompressed uploads, which is exactly what the key needs.
+              const encoding = tags.find((tag) => tag.name === 'Content-Encoding')?.value
+
+              if (!isArweaveId(id) || !isContentHash(hash) || contentType === undefined) {
+                continue
+              }
+
+              /*
+               * Never take the server's word for its own filter. A hostile or
+               * buggy gateway returning somebody else's id would put it in the
+               * manifest and in the cache, breaking every future deploy too.
+               */
+              if (edge.node?.owner?.address !== owner) {
+                rejected++
+                continue
+              }
+
+              const key = incrementalCacheKey(hash, contentType, encoding)
+              /*
+               * Newest first, and any upload of these exact bytes under this
+               * exact type and encoding is equally valid, so the first
+               * sighting wins and there is nothing to reconcile.
+               */
+              if (wanted.has(key) && !found[key]) {
+                found[key] = id
+              }
+            }
+
+            if (!transactions.pageInfo?.hasNextPage || edges.length === 0) break
+          }
+        } catch (error) {
+          failedBatches++
+          lastError = error
         }
       }
 
       if (rejected > 0) {
         onWarning?.(`Ignored ${rejected} result(s) from ${endpoint} not owned by ${owner}`)
+      }
+
+      const batches = Math.ceil(hashes.length / hashBatchSize)
+      if (failedBatches === batches) {
+        // Nothing could be asked at all: fail loudly rather than report "no
+        // matches", which would look exactly like a wallet with no history.
+        throw lastError
+      }
+
+      if (failedBatches > 0) {
+        const message = lastError instanceof Error ? lastError.message : String(lastError)
+        onWarning?.(
+          `Could not look up ${failedBatches} of ${batches} batch(es) of past uploads ` +
+            `(${message}); those files will be uploaded again`,
+        )
       }
 
       return found

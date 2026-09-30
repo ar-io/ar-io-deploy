@@ -67,6 +67,7 @@ function indexWith(fetchImpl: typeof fetch, onWarning?: (message: string) => voi
     gatewayUrl: 'https://arweave.net',
     onWarning,
     owner: OWNER,
+    retryDelaysMs: [0, 0],
   })
 }
 
@@ -277,7 +278,8 @@ describe('incremental flags', () => {
     expect(globalFlags.incremental.flag.default).toBe(false)
   })
 
-  it('defaults to sweeping arweave.net', () => {
+  it("defaults to sweeping Turbo's gateway, where Turbo uploads are indexed first", () => {
+    expect(DEFAULT_INCREMENTAL_GATEWAY).toBe('https://turbo-gateway.com')
     expect(globalFlags.incrementalGateway.flag.default).toBe(DEFAULT_INCREMENTAL_GATEWAY)
   })
 
