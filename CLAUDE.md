@@ -39,15 +39,26 @@ All CLI flags are defined in `src/constants/flags.ts` as a single source of trut
 
 ### Upload Flow
 
-`src/workflows/upload-workflow.ts` orchestrates: create signer -> init Turbo client -> handle on-demand funding (with 10% buffer) -> plan the folder upload (`planFolderUpload`: hash, cache lookup, in-run dedupe, compression) -> credit check priced on the plan -> upload -> return tx ID. The plan is computed once and reused by `uploadFolder`, so the credit check prices exactly what will be sent, not the whole folder.
+`src/workflows/upload-workflow.ts` orchestrates: create signer -> init Turbo client -> handle on-demand funding (with 10% buffer) -> plan the folder upload (`planFolderUpload`: hash, cache lookup, chain lookup with `--incremental`, in-run dedupe, compression) -> credit check priced on the plan (`uploadBytes` + `manifestBytes`) -> upload -> return tx ID. The plan is computed once and reused by `uploadFolder`, so for folder uploads the credit check prices exactly what will be sent, not the whole folder. `--deploy-file` has no plan and prices the file's raw size; `--on-demand` skips the check.
 
 ### Compression
 
-`--compress gzip|br` (`src/utils/compression.ts`) compresses each file before upload and adds a `Content-Encoding` tag; already-compressed formats, `--compress-exclude` globs, and files that would grow are uploaded as-is. It only works if gateways send that header for items they have not indexed yet (ar-io-node #964/#966); without it, pages render as garbage right after a deploy.
+`--compress gzip|br` (`src/utils/compression.ts`) compresses each file before upload and adds a `Content-Encoding` tag; already-compressed formats and `--compress-exclude` globs are uploaded as-is. Every other file is compressed, even one gzip makes a few bytes larger: the encoding is part of the file's cache key (and, with `--incremental`, of what the chain index matches), so uploading a planned-as-gzip file uncompressed would make it unfindable. It only works if gateways send that header for items they have not indexed yet (ar-io-node #964/#966); without it, pages render as garbage right after a deploy.
 
 ### Deduplication Cache
 
 Located at `.ario-deploy/transaction-cache.json` (relative to cwd). Maps SHA-256 file hashes to `{transactionId, createdAtTimestamp, lastUsedTimestamp}`; compressed uploads use `<encoding>:<hash>` keys so they never reuse uncompressed transactions. LRU eviction at configurable max entries (default 10,000). Disable with `--no-dedupe`. Separately, files identical to another file in the same run share one upload, keyed on MIME type + content so the `Content-Type` tag stays correct; this applies even with `--no-dedupe`, since it reuses nothing from earlier deploys.
+
+### Incremental Uploads (`--incremental`, opt-in)
+
+`src/utils/incremental.ts` adds the two things the local cache cannot do: a `File-SHA256` tag on every uploaded file, and a chain-backed index (`createChainIndex`) that rebuilds the hash -> transaction id map by querying the uploader's own past items over GraphQL. That index is what makes a fresh CI checkout cheap. Ids reach disk during the run — `createCacheWriter` writes on the leading edge, then coalesces onto a 500 ms **trailing** timer (unref'd) and flushes on `SIGINT`/`SIGTERM`, because a leading edge alone is a throttle that strands a whole concurrent batch, and Ctrl-C runs no `finally`. Call `dispose()` on every path out — including the ones where `io.error` throws — or the handlers leak one per run.
+
+Four things are load-bearing and easy to break:
+
+- **Deploy-invariant file tags.** A data item's id covers its tags, so any per-deploy tag on a file (the commit SHA above all) moves every id and silently doubles the bill. `incrementalFileTags()` stamps only `App-Name`, `Content-Type`, `File-SHA256` (hash of the file on disk) and, when compressed, `Content-Encoding` (set by configuration, so still invariant), guarded by `assertDeployInvariantTags`; `GIT-HASH` goes on the manifest instead.
+- **The owner address.** GraphQL `owners` matches `base64url(sha256(publicKey))`, never `signer.getNativeAddress()` — that returns base58 for Solana, `0x…` for Ethereum/Polygon and `kyve1…` for KYVE, and a gateway answers those with HTTP 200 and zero edges. Use `ownerAddressFromPublicKey()`; `assertOwnerAddress()` refuses anything else rather than querying with a value that can only ever match nothing.
+- **Content type and encoding in the key.** Reuse is keyed `<sha256>|<mime-type>`, plus `|<encoding>` when compressed (`incrementalCacheKey`). Hash alone would serve byte-identical `a.json` and `b.txt` under one `Content-Type`, and would hand a gzip deploy an uncompressed upload; the chain index reads `Content-Encoding` off each result for the same reason. Non-incremental runs keep the historic keys (`<sha256>`, `gzip:<sha256>`), so a project that toggles the flag stores both against the same LRU cap.
+- **Pricing follows the plan, not the folder.** `planFolderUpload` is split out of `uploadFolder` so `runUploadWorkflow` can quote `plan.uploadBytes + plan.manifestBytes`. Quoting the whole folder would refuse the two-chunk redeploy this flag exists to make cheap.
 
 ### Signer Types
 

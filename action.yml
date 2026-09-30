@@ -68,12 +68,19 @@ inputs:
   dedupe-cache-max-entries:
     description: 'Maximum number of entries to keep in the dedupe cache (LRU). Default is 10000.'
     required: false
+  incremental:
+    description: "Reuse files already on Arweave. Publishes each file's content hash as a tag and recovers transaction ids the restored cache is missing by querying this wallet's past uploads, so a redeploy pays only for the files that actually changed. Off by default."
+    required: false
+    default: 'false'
+  incremental-gateway:
+    description: 'Gateway whose GraphQL endpoint is queried for past uploads when incremental is enabled. Defaults to https://turbo-gateway.com, where Turbo uploads are indexed first.'
+    required: false
   compress:
-    description: 'Compress files before upload and tag them with Content-Encoding: gzip, br, or none. Gateways serve the encoded bytes to every client, so prefer gzip unless you know your clients accept br. Images, fonts, video and archives are uploaded as-is.'
+    description: 'Compress files before upload and tag them with Content-Encoding: gzip, br, or none. Gateways serve the encoded bytes to every client, so prefer gzip unless you know your clients accept br. Already-compressed formats (JPEG, PNG, GIF, WebP, AVIF, WOFF/WOFF2, MP3, MP4, WebM, zip/gz and other archives) are uploaded as-is.'
     required: false
     default: 'none'
   compress-exclude:
-    description: 'Comma-separated globs of files to upload uncompressed (e.g. "llms*.txt,*.md"). A pattern without "/" matches the file name in any directory.'
+    description: 'Comma-separated globs of files to upload uncompressed (e.g. "llms*.txt,*.md"). A pattern without "/" matches the file name in any directory. No spaces: the value is passed to the CLI unquoted.'
     required: false
 
 outputs:
@@ -213,6 +220,18 @@ runs:
           ARGS="$ARGS --no-dedupe"
         elif [[ -n "${{ inputs.dedupe-cache-max-entries }}" ]]; then
           ARGS="$ARGS --dedupe-cache-max-entries ${{ inputs.dedupe-cache-max-entries }}"
+        fi
+
+        # Incremental uploads recover ids from the chain, which is what makes a
+        # missing or stale restored cache cheap instead of expensive. Passed
+        # through even alongside no-dedupe, which asks for the opposite, so the
+        # CLI refuses the combination out loud rather than this step dropping
+        # the flag and deploying as if it had never been set.
+        if [[ "${{ inputs.incremental }}" == "true" ]]; then
+          ARGS="$ARGS --incremental"
+          if [[ -n "${{ inputs.incremental-gateway }}" ]]; then
+            ARGS="$ARGS --incremental-gateway ${{ inputs.incremental-gateway }}"
+          fi
         fi
 
         # Add compression options

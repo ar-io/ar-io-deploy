@@ -195,7 +195,9 @@ describe('compressed uploads', () => {
     }
   })
 
-  it('uploads a file as-is when compressing would make it bigger', async () => {
+  it('compresses even a file gzip makes bigger, so its tags match its cache key', async () => {
+    // Uploading it uncompressed would leave a "gzip" cache key pointing at an
+    // untagged item, which the chain index could never match again.
     write('tiny.js', 'a')
 
     const { client, uploads } = stubClient()
@@ -205,8 +207,8 @@ describe('compressed uploads', () => {
     })
     const file = fileUpload(uploads)
 
-    expect(file.tags['Content-Encoding']).toBeUndefined()
-    expect(file.body.toString('utf8')).toBe('a')
+    expect(file.tags['Content-Encoding']).toBe('gzip')
+    expect(zlib.gunzipSync(file.body).toString('utf8')).toBe('a')
   })
 
   it('keys compressed uploads separately, so turning compression on re-uploads', async () => {

@@ -93,6 +93,9 @@ export interface DeployOptions {
 Utility functions organized by functionality:
 
 - **constants.ts**: Regular expressions, TTL bounds, etc.
+- **cache.ts**: Local SHA-256 -> transaction id dedupe cache
+- **compression.ts**: `--compress` support: glob excludes, which formats to skip, and gzip/brotli compression
+- **incremental.ts**: Content-hash tagging and the chain-backed hash -> transaction id index
 - **signer.ts**: Signer creation based on type
 - **uploader.ts**: File and folder upload logic
 

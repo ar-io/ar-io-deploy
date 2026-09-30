@@ -19,6 +19,7 @@ import {
   createSolanaArnsSigner,
   type SolanaCluster,
 } from '../utils/solana.js'
+import { validateIncrementalDedupe } from '../utils/validators.js'
 import { runUploadWorkflow } from '../workflows/upload-workflow.js'
 
 export default class Deploy extends Command {
@@ -29,6 +30,7 @@ export default class Deploy extends Command {
   static override examples = [
     '<%= config.bin %> deploy --wallet ./wallet.json',
     '<%= config.bin %> deploy --wallet ./wallet.json --deploy-folder ./dist',
+    '<%= config.bin %> deploy --wallet ./wallet.json --deploy-folder ./dist --incremental',
     '<%= config.bin %> deploy --wallet ./wallet.json --deploy-file ./dist/index.html',
     '<%= config.bin %> deploy --wallet ./wallet.json --use-arns --arns-name my-app --arns-wallet ./arns-id.json',
     '<%= config.bin %> deploy --wallet ./wallet.json --use-arns --arns-name my-app --arns-wallet ./arns-id.json --undername staging',
@@ -147,6 +149,19 @@ export default class Deploy extends Command {
         ? 0
         : baseConfig['dedupe-cache-max-entries']
 
+      /*
+       * `--no-dedupe` is refused by oclif exclusivity; this catches the other
+       * way of saying the same thing, so both spellings fail identically
+       * instead of one being silently honoured.
+       */
+      const incrementalConflict = validateIncrementalDedupe(
+        baseConfig.incremental,
+        effectiveCacheMaxEntries,
+      )
+      if (incrementalConflict !== true) {
+        this.error(incrementalConflict)
+      }
+
       const deployConfig: DeployConfig = {
         'arns-name': baseConfig['arns-name'],
         'arns-private-key': arnsKeyConfig.privateKey,
@@ -158,6 +173,8 @@ export default class Deploy extends Command {
         'deploy-file': baseConfig['deploy-file'],
         'deploy-folder': baseConfig['deploy-folder'],
         'fallback-file': baseConfig['fallback-file'],
+        incremental: baseConfig.incremental,
+        'incremental-gateway': baseConfig['incremental-gateway'],
         'max-token-amount': advancedOptions?.maxTokenAmount || baseConfig['max-token-amount'],
         'no-dedupe': baseConfig['no-dedupe'],
         'on-demand': advancedOptions?.onDemand || baseConfig['on-demand'],

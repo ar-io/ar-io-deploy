@@ -147,8 +147,9 @@ npx @ar.io/deploy deploy
 - `--on-demand ario` — auto-fund upload if balance is low
 - `--no-dedupe` — force re-upload all files (identical files within one deploy are still uploaded once)
 - `--compress gzip` — compress HTML/JS/CSS/JSON before upload (~5-8x cheaper); pair with `--compress-exclude "llms*.txt,*.md"` for files plain HTTP clients fetch
+- `--incremental` — find files already uploaded by this wallet on chain, so a CI deploy with no local cache pays only for what changed (uploads take about 5-7 minutes to become findable)
 
-Unchanged files are never re-uploaded, and the credit check prices only what will actually be uploaded.
+Unchanged files are not re-uploaded while the local dedupe cache knows them, or at all with `--incremental`, and the credit check prices only what will actually be uploaded.
 
 **With `--compress`, verify a page right after deploying.** Gateways must send
 `Content-Encoding` even for items they have not indexed yet (ar-io-node

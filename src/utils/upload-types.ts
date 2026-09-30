@@ -14,6 +14,15 @@ export interface UploadFileArgs {
 }
 
 export interface UploadClient {
+  /**
+   * The signer behind the client, when there is one.
+   *
+   * Incremental uploads need the uploader's own public key: a `File-SHA256`
+   * tag is a claim anyone can make, so only the wallet's own past
+   * transactions are trusted to answer "have I already paid for these bytes?".
+   * The key, not `getNativeAddress()` — see `ownerAddressFromPublicKey`.
+   */
+  signer?: { getPublicKey: () => Promise<Buffer | Uint8Array> }
   uploadFile: (args: UploadFileArgs) => Promise<UploadClientResult>
 }
 
