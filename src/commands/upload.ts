@@ -69,6 +69,8 @@ export default class Upload extends Command {
         : baseConfig['dedupe-cache-max-entries']
 
       const uploadCfg = {
+        compress: baseConfig.compress,
+        'compress-exclude': baseConfig['compress-exclude'],
         'dedupe-cache-max-entries': effectiveCacheMaxEntries,
         'deploy-file': baseConfig['deploy-file'],
         'deploy-folder': baseConfig['deploy-folder'],

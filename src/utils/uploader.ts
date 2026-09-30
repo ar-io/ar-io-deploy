@@ -1,3 +1,4 @@
+import fs from 'node:fs'
 import path from 'node:path'
 import { Readable } from 'node:stream'
 
@@ -13,6 +14,12 @@ import {
   touchCacheEntry,
   type TransactionCache,
 } from './cache.js'
+import {
+  compress,
+  type CompressionConfig,
+  type ContentEncoding,
+  shouldCompress,
+} from './compression.js'
 import type { UploadClient, UploadCost, UploadSize } from './upload-types.js'
 
 type DataItemTag = { name: string; value: string }
@@ -42,10 +49,14 @@ export interface UploadResult {
 export interface FolderUploadResult extends UploadResult {
   /** Number of files that were cache hits (not re-uploaded) */
   cacheHits: number
+  /** Number of files identical to another file in this run (sharing its upload) */
+  duplicates: number
   /** Total number of files in the folder */
   totalFiles: number
   /** Number of files that were uploaded */
   uploaded: number
+  /** Bytes sent for those files (after compression), excluding the manifest */
+  uploadedBytes: number
 }
 
 export async function uploadFile(
@@ -53,13 +64,19 @@ export async function uploadFile(
   filePath: string,
   options?: {
     cache?: TransactionCache
+    compression?: CompressionConfig
     fundingMode?: OnDemandFunding
   },
 ): Promise<UploadResult> {
   const mimeType = mime.lookup(filePath) || 'application/octet-stream'
+  let encoding =
+    options?.compression && shouldCompress(path.basename(filePath), options.compression)
+      ? options.compression.encoding
+      : undefined
 
-  // Compute hash if cache is provided
-  const fileHash = options?.cache ? await hashFile(filePath) : undefined
+  // Compute hash if cache is provided; compressed uploads get their own key
+  const rawHash = options?.cache ? await hashFile(filePath) : undefined
+  const fileHash = rawHash && encoding ? `${encoding}:${rawHash}` : rawHash
 
   // Check cache for hit
   if (fileHash && options?.cache) {
@@ -74,6 +91,19 @@ export async function uploadFile(
     }
   }
 
+  let compressed: Buffer | undefined
+  if (encoding) {
+    const raw = fs.readFileSync(filePath)
+    compressed = await compress(raw, encoding)
+    // Tiny files can grow; upload those as-is, without the encoding tag.
+    if (compressed.length >= raw.length) {
+      compressed = undefined
+      encoding = undefined
+    }
+  }
+
+  const body = compressed
+
   // Upload file
   const uploadResult = await turbo.uploadFile({
     dataItemOpts: {
@@ -87,9 +117,12 @@ export async function uploadFile(
           name: 'Content-Type',
           value: mimeType,
         },
+        ...(body && encoding ? [{ name: 'Content-Encoding', value: encoding }] : []),
       ],
     },
-    file: filePath,
+    ...(body
+      ? { fileSizeFactory: () => body.length, fileStreamFactory: () => Readable.from(body) }
+      : { file: filePath }),
     ...(options?.fundingMode && { fundingMode: options.fundingMode }),
   })
 
@@ -120,21 +153,174 @@ export async function uploadFile(
 /** Default concurrency for parallel file uploads */
 const DEFAULT_UPLOAD_CONCURRENCY = 10
 
-interface FileUploadTask {
+/** Length of an Arweave transaction ID, used to estimate the manifest size. */
+const TRANSACTION_ID_LENGTH = 43
+
+export interface PlannedFile {
+  /** Compressed bytes to upload, when compression applies and actually helps. */
+  body?: Buffer
+  /** Dedupe-cache key: the file's SHA-256, prefixed with the encoding when compressed. */
+  cacheKey: string
   cached?: { transactionId: string }
+  /**
+   * Relative path of an identical file earlier in this run. The file is not
+   * uploaded; it shares that file's transaction.
+   */
+  duplicateOf?: string
+  encoding?: ContentEncoding
   fullPath: string
-  hash: string
   relativePath: string
+  /** Bytes this file adds to the upload: 0 when cached or a duplicate. */
+  uploadBytes: number
+}
+
+export interface FolderUploadPlan {
+  /** Updated dedupe cache (cache hits touched), or undefined when dedupe is off. */
+  cache?: TransactionCache
+  cacheHits: number
+  duplicates: number
+  files: PlannedFile[]
+  /** Estimated size of the manifest, which is always uploaded. */
+  manifestBytes: number
+  /** Total bytes that uploading this plan will send, excluding the manifest. */
+  uploadBytes: number
+}
+
+/**
+ * Work out what uploading a folder will actually send, without uploading.
+ *
+ * - Files whose content is in the dedupe cache reuse their transaction.
+ * - Files identical to another file in this run share one upload, so e.g. a
+ *   static export that writes the same payload under two names pays once.
+ * - With `compression`, eligible files are compressed; the cache key includes
+ *   the encoding so compressed and uncompressed uploads never mix.
+ *
+ * `uploadBytes` is what the credit check should price.
+ */
+export async function planFolderUpload(
+  folderPath: string,
+  options?: {
+    cache?: TransactionCache
+    compression?: CompressionConfig
+    concurrency?: number
+  },
+): Promise<FolderUploadPlan> {
+  const useCache = options?.cache !== undefined
+  const compression = options?.compression
+
+  const relativePaths = getAllFiles(folderPath)
+
+  if (relativePaths.length === 0) {
+    throw new Error('Folder is empty, nothing to upload')
+  }
+
+  const files: PlannedFile[] = await Promise.all(
+    relativePaths.map(async (relativePath) => {
+      const fullPath = path.join(folderPath, relativePath)
+      const encoding =
+        compression && shouldCompress(relativePath, compression) ? compression.encoding : undefined
+      const hash = useCache ? await hashFile(fullPath) : ''
+      const cacheKey = hash && encoding ? `${encoding}:${hash}` : hash
+      return { cacheKey, encoding, fullPath, relativePath, uploadBytes: 0 }
+    }),
+  )
+
+  let cache = options?.cache
+  let cacheHits = 0
+  let duplicates = 0
+  const firstUpload = new Map<string, PlannedFile>()
+
+  for (const file of files) {
+    if (!cache || !file.cacheKey) continue
+
+    const cached = getCachedTransaction(cache, file.cacheKey)
+    if (cached) {
+      file.cached = { transactionId: cached.transactionId }
+      cache = touchCacheEntry(cache, file.cacheKey)
+      cacheHits++
+      continue
+    }
+
+    const first = firstUpload.get(file.cacheKey)
+    if (first) {
+      file.duplicateOf = first.relativePath
+      duplicates++
+    } else {
+      firstUpload.set(file.cacheKey, file)
+    }
+  }
+
+  // Size (and compress) only the files that will actually be uploaded.
+  const toUpload = files.filter((file) => !file.cached && !file.duplicateOf)
+  const limit = pLimit(options?.concurrency ?? DEFAULT_UPLOAD_CONCURRENCY)
+
+  await Promise.all(
+    toUpload.map((file) =>
+      limit(async () => {
+        if (!file.encoding) {
+          file.uploadBytes = fs.statSync(file.fullPath).size
+          return
+        }
+
+        const raw = fs.readFileSync(file.fullPath)
+        const compressed = await compress(raw, file.encoding)
+
+        // Tiny files can grow; upload those as-is, without the encoding tag.
+        if (compressed.length < raw.length) {
+          file.body = compressed
+          file.uploadBytes = compressed.length
+        } else {
+          file.encoding = undefined
+          file.uploadBytes = raw.length
+        }
+      }),
+    ),
+  )
+
+  return {
+    cache,
+    cacheHits,
+    duplicates,
+    files,
+    manifestBytes: estimateManifestBytes(relativePaths),
+    uploadBytes: toUpload.reduce((sum, file) => sum + file.uploadBytes, 0),
+  }
+}
+
+/** Manifest paths for a set of files: each file, plus `dir` for every `dir/index.html`. */
+function manifestPathKeys(relativePath: string): string[] {
+  return relativePath.endsWith('/index.html')
+    ? [relativePath, relativePath.replace(/\/index\.html$/, '')]
+    : [relativePath]
+}
+
+function estimateManifestBytes(relativePaths: string[]): number {
+  const placeholder = { id: 'x'.repeat(TRANSACTION_ID_LENGTH) }
+  const paths = Object.fromEntries(
+    relativePaths
+      .flatMap((relativePath) => manifestPathKeys(relativePath))
+      .map((key) => [key, placeholder]),
+  )
+  const manifest = {
+    fallback: placeholder,
+    index: { path: 'index.html' },
+    manifest: 'arweave/paths',
+    paths,
+    version: '0.2.0',
+  }
+  return Buffer.byteLength(JSON.stringify(manifest))
 }
 
 /**
  * Upload a folder with per-file deduplication.
- * Each file is checked against the cache individually, and only uncached files are uploaded.
- * A manifest is then constructed and uploaded to create the folder structure.
+ * Each file is checked against the cache individually, identical files in the
+ * same run are uploaded once, and only what is left is uploaded (compressed,
+ * when `compression` is set). A manifest is then constructed and uploaded to
+ * create the folder structure.
  *
  * @param turbo - Upload client used for file and manifest uploads.
  * @param folderPath - Folder to upload.
- * @param options - Upload options for caching, concurrency, funding, and failure handling.
+ * @param options - Upload options for caching, compression, concurrency, funding, and failure handling.
  * @returns Folder upload result including manifest transaction ID and cache stats.
  */
 export async function uploadFolder(
@@ -142,6 +328,7 @@ export async function uploadFolder(
   folderPath: string,
   options?: {
     cache?: TransactionCache
+    compression?: CompressionConfig
     concurrency?: number
     /**
      * Path, relative to the folder, whose transaction becomes the manifest's
@@ -150,92 +337,86 @@ export async function uploadFolder(
      */
     fallbackFile?: string
     fundingMode?: OnDemandFunding
+    /** A plan from `planFolderUpload`, reused instead of planning again. */
+    plan?: FolderUploadPlan
     throwOnFailure?: boolean
   },
 ): Promise<FolderUploadResult> {
   const concurrency = options?.concurrency ?? DEFAULT_UPLOAD_CONCURRENCY
-  const useCache = options?.cache !== undefined
 
-  // Get all files in the folder
-  const relativePaths = getAllFiles(folderPath)
-
-  if (relativePaths.length === 0) {
-    throw new Error('Folder is empty, nothing to upload')
-  }
+  const plan =
+    options?.plan ??
+    (await planFolderUpload(folderPath, {
+      cache: options?.cache,
+      compression: options?.compression,
+      concurrency,
+    }))
+  const { cacheHits, duplicates, files } = plan
+  const relativePaths = new Set(files.map((file) => file.relativePath))
 
   /*
    * Validate before uploading anything: every check below this point happens
    * after files have been paid for, and a mistyped fallback should cost
    * nothing.
    */
-  if (options?.fallbackFile !== undefined && !relativePaths.includes(options.fallbackFile)) {
+  if (options?.fallbackFile !== undefined && !relativePaths.has(options.fallbackFile)) {
     throw new Error(
       `Fallback file not found in folder: ${options.fallbackFile}. ` +
         `It must be a path relative to the deploy folder, e.g. "404.html".`,
     )
   }
 
-  // Prepare file tasks with hashes (if caching is enabled)
-  const tasks: FileUploadTask[] = await Promise.all(
-    relativePaths.map(async (relativePath) => {
-      const fullPath = path.join(folderPath, relativePath)
-      const hash = useCache ? await hashFile(fullPath) : ''
-      return { fullPath, hash, relativePath }
-    }),
-  )
-
-  // Check cache for each file
-  let cache = options?.cache ?? {}
-  let cacheHits = 0
-
-  for (const task of tasks) {
-    if (useCache && task.hash) {
-      const cached = getCachedTransaction(cache, task.hash)
-      if (cached) {
-        task.cached = { transactionId: cached.transactionId }
-        cache = touchCacheEntry(cache, task.hash)
-        cacheHits++
-      }
-    }
-  }
+  const useCache = plan.cache !== undefined
+  let cache = plan.cache ?? {}
 
   // If all files are cached, we still need to build and upload a new manifest
   // (because the manifest itself has a unique transaction ID each time)
-  const uncachedTasks = tasks.filter((t) => !t.cached)
+  const toUpload = files.filter((file) => !file.cached && !file.duplicateOf)
 
-  // Upload uncached files with concurrency control using p-limit
+  // Upload with concurrency control using p-limit
   const limit = pLimit(concurrency)
 
   const uploadResults = await Promise.all(
-    uncachedTasks.map((task) =>
+    toUpload.map((file) =>
       limit(async () => {
-        const mimeType = mime.lookup(task.fullPath) || 'application/octet-stream'
+        const mimeType = mime.lookup(file.fullPath) || 'application/octet-stream'
+        const tags = [...provenanceTags(), { name: 'Content-Type', value: mimeType }]
+        const { body } = file
 
         const uploadResult = await turbo.uploadFile({
           dataItemOpts: {
-            tags: [...provenanceTags(), { name: 'Content-Type', value: mimeType }],
+            tags:
+              body && file.encoding
+                ? [...tags, { name: 'Content-Encoding', value: file.encoding }]
+                : tags,
           },
-          file: task.fullPath,
+          ...(body
+            ? { fileSizeFactory: () => body.length, fileStreamFactory: () => Readable.from(body) }
+            : { file: file.fullPath }),
           ...(options?.fundingMode && { fundingMode: options.fundingMode }),
         })
 
         if (!uploadResult?.id) {
           if (options?.throwOnFailure) {
-            throw new Error(`Failed to upload file: ${task.relativePath}`)
+            throw new Error(`Failed to upload file: ${file.relativePath}`)
           }
 
-          return { hash: task.hash, task, transactionId: null }
+          return { file, transactionId: null }
         }
 
-        return { hash: task.hash, task, transactionId: uploadResult.id }
+        return { file, transactionId: uploadResult.id }
       }),
     ),
   )
 
   // Update cache with all successful uploads (done sequentially to avoid race conditions)
+  const uploadedIds = new Map<string, string>()
   for (const result of uploadResults) {
-    if (useCache && result.hash && result.transactionId) {
-      cache = setCachedTransaction(cache, result.hash, result.transactionId)
+    if (!result.transactionId) continue
+
+    uploadedIds.set(result.file.relativePath, result.transactionId)
+    if (useCache && result.file.cacheKey) {
+      cache = setCachedTransaction(cache, result.file.cacheKey, result.transactionId)
     }
   }
 
@@ -243,36 +424,27 @@ export async function uploadFolder(
   const failedUploads = uploadResults.filter((r) => r.transactionId === null)
   if (failedUploads.length > 0 && options?.throwOnFailure) {
     throw new Error(
-      `Failed to upload ${failedUploads.length} file(s): ${failedUploads.map((f) => f.task.relativePath).join(', ')}`,
+      `Failed to upload ${failedUploads.length} file(s): ${failedUploads.map((f) => f.file.relativePath).join(', ')}`,
     )
   }
 
-  // Build manifest paths from cached and newly uploaded files
+  // Build manifest paths from cached, shared and newly uploaded files
   const manifestPaths: Record<string, { id: string }> = {}
 
-  for (const task of tasks) {
-    let transactionId: string | null = null
-
-    if (task.cached) {
-      transactionId = task.cached.transactionId
-    } else {
-      const uploadResult = uploadResults.find((r) => r.task === task)
-      transactionId = uploadResult?.transactionId ?? null
-    }
+  for (const file of files) {
+    const transactionId =
+      file.cached?.transactionId ?? uploadedIds.get(file.duplicateOf ?? file.relativePath)
 
     if (transactionId) {
-      manifestPaths[task.relativePath] = { id: transactionId }
-
-      // Add directory index support: if file is dir/index.html, also add dir → same ID
-      if (task.relativePath.endsWith('/index.html')) {
-        const dirPath = task.relativePath.replace(/\/index\.html$/, '')
-        manifestPaths[dirPath] = { id: transactionId }
+      // Directory index support: dir/index.html is also served at dir
+      for (const key of manifestPathKeys(file.relativePath)) {
+        manifestPaths[key] = { id: transactionId }
       }
     }
   }
 
   // Determine the index path (root index.html)
-  const indexPath = relativePaths.includes('index.html') ? 'index.html' : undefined
+  const indexPath = relativePaths.has('index.html') ? 'index.html' : undefined
 
   /*
    * Determine the fallback — the transaction a gateway serves for any path the
@@ -288,7 +460,7 @@ export async function uploadFolder(
    * `index` takes. The v0.2.0 spec differs between the two.
    */
   const fallbackPath =
-    options?.fallbackFile ?? (relativePaths.includes('404.html') ? '404.html' : undefined)
+    options?.fallbackFile ?? (relativePaths.has('404.html') ? '404.html' : undefined)
 
   const fallbackId = fallbackPath ? manifestPaths[fallbackPath]?.id : undefined
 
@@ -321,11 +493,13 @@ export async function uploadFolder(
   }
 
   return {
-    cacheHit: cacheHits === tasks.length,
+    cacheHit: cacheHits === files.length,
     cacheHits,
-    totalFiles: tasks.length,
+    duplicates,
+    totalFiles: files.length,
     transactionId: manifestUploadResult.id,
     updatedCache: useCache ? cache : undefined,
-    uploaded: uncachedTasks.length - failedUploads.length,
+    uploaded: toUpload.length - failedUploads.length,
+    uploadedBytes: plan.uploadBytes,
   }
 }
