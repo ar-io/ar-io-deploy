@@ -3,6 +3,7 @@ import { Flags } from '@oclif/core'
 import { promptArnsName, promptCluster } from '../prompts/arns.js'
 import { promptDeployTarget } from '../prompts/deployment.js'
 import { promptSignerType } from '../prompts/wallet.js'
+import { CONTENT_ENCODINGS } from '../utils/compression.js'
 import { createFlagConfig, type ResolvedConfig } from '../utils/config-resolver.js'
 import { TTL_MAX, TTL_MIN } from '../utils/constants.js'
 import {
@@ -60,6 +61,22 @@ export const globalFlags = {
       required: false,
     }),
     prompt: promptCluster,
+  }),
+  compress: createFlagConfig<string>({
+    flag: Flags.string({
+      default: 'none',
+      description:
+        'Compress files before upload and tag them with Content-Encoding (gzip or br). Gateways serve the encoded bytes to every client, so prefer gzip unless you know your clients accept br. Already-compressed formats (images, fonts, video, archives) are uploaded as-is.',
+      options: ['none', ...CONTENT_ENCODINGS],
+      required: false,
+    }),
+  }),
+  compressExclude: createFlagConfig<string | undefined>({
+    flag: Flags.string({
+      description:
+        'Comma-separated globs of files to upload uncompressed, relative to the deploy folder (e.g. "llms*.txt,*.md"). A pattern without "/" matches the file name in any directory.',
+      required: false,
+    }),
   }),
   dedupeCacheMaxEntries: createFlagConfig<number>({
     flag: Flags.integer({
@@ -234,6 +251,8 @@ export const deployFlags = {
   'arns-private-key': globalFlags.arnsPrivateKey.flag,
   'arns-wallet': globalFlags.arnsWallet.flag,
   cluster: globalFlags.cluster.flag,
+  compress: globalFlags.compress.flag,
+  'compress-exclude': globalFlags.compressExclude.flag,
   'dedupe-cache-max-entries': globalFlags.dedupeCacheMaxEntries.flag,
   'deploy-file': globalFlags.deployFile.flag,
   'deploy-folder': globalFlags.deployFolder.flag,
@@ -281,6 +300,8 @@ export interface DeployConfig {
   'arns-private-key'?: string
   'arns-wallet'?: string
   cluster: string
+  compress?: string
+  'compress-exclude'?: string
   'dedupe-cache-max-entries': number
   'deploy-file'?: string
   'deploy-folder': string
@@ -307,6 +328,8 @@ export const deployFlagConfigs = {
   'arns-private-key': globalFlags.arnsPrivateKey,
   'arns-wallet': globalFlags.arnsWallet,
   cluster: globalFlags.cluster,
+  compress: globalFlags.compress,
+  'compress-exclude': globalFlags.compressExclude,
   'dedupe-cache-max-entries': globalFlags.dedupeCacheMaxEntries,
   'deploy-file': globalFlags.deployFile,
   'deploy-folder': globalFlags.deployFolder,
@@ -328,6 +351,8 @@ export const deployFlagConfigs = {
  * Upload command — file/folder to Arweave via Turbo without updating ArNS
  */
 export const uploadFlagConfigs = {
+  compress: globalFlags.compress,
+  'compress-exclude': globalFlags.compressExclude,
   'dedupe-cache-max-entries': globalFlags.dedupeCacheMaxEntries,
   'deploy-file': globalFlags.deployFile,
   'deploy-folder': globalFlags.deployFolder,

@@ -35,6 +35,7 @@ Your app is now permanently live at `https://myapp.ar.io`.
 - [Bundler service](#bundler-service)
 - [Command Options](#command-options)
 - [Deduplication](#deduplication)
+- [Compression](#compression)
 - [Package.json Scripts](#packagejson-scripts)
 - [GitHub Action](#github-action)
 - [CLI in GitHub Actions](#cli-in-github-actions)
@@ -338,9 +339,11 @@ ArNS authority key (controls the name, signs the update — always Solana):
 - `--max-token-amount`: Maximum token amount for on-demand payment (used with `--on-demand`)
 - `--no-dedupe`: Disable deduplication (do not cache or reuse previous uploads)
 - `--dedupe-cache-max-entries`: Maximum number of entries to keep in the dedupe cache (LRU). Default: `10000`
+- `--compress`: Compress files before upload and tag them with `Content-Encoding`. Choices: `gzip`, `br`, `none` (default). See [Compression](#compression).
+- `--compress-exclude`: Comma-separated globs of files to upload uncompressed, e.g. `"llms*.txt,*.md"`
 - `--uploader`: Custom Turbo upload service base URL. See the **Bundler service** section.
 
-**`upload`** (explicit upload without ArNS): accepts `--deploy-folder`, `--deploy-file`, wallet/signer flags, `--uploader`, `--on-demand` / `--max-token-amount`, and dedupe flags only.
+**`upload`** (explicit upload without ArNS): accepts `--deploy-folder`, `--deploy-file`, `--fallback-file`, wallet/signer flags, `--uploader`, `--on-demand` / `--max-token-amount`, dedupe flags, and `--compress` / `--compress-exclude` only.
 
 ## Deduplication
 
@@ -351,8 +354,11 @@ By default, ario-deploy caches your deployment log to prevent uploading duplicat
 1. When you deploy, ario-deploy hashes each file in your build
 2. It checks the local cache for matching hashes from previous uploads
 3. Files that haven't changed are skipped - the existing transaction ID is reused
-4. Only new or modified files are uploaded to Arweave
-5. The cache is stored locally in `.ario-deploy/transaction-cache.json`
+4. Files identical to another file in the same deploy are uploaded once and share its transaction (static exports often write the same payload under several names)
+5. Only new or modified files are uploaded to Arweave
+6. The cache is stored locally in `.ario-deploy/transaction-cache.json`
+
+The Turbo credit check runs after this planning step, so it prices only what will actually be uploaded, not the whole folder.
 
 **Disable deduplication:**
 
@@ -378,6 +384,31 @@ The cache file is stored at `.ario-deploy/transaction-cache.json` in your projec
 - Add it to `.gitignore` if you don't want to share cache across team members
 - Commit it to share cached transaction IDs with your team (reduces duplicate uploads)
 - Delete it to start fresh: `rm -rf .ario-deploy/`
+
+## Compression
+
+Arweave storage is priced per byte, and HTML, JavaScript, CSS and JSON typically shrink 5-8x when compressed (a 169 MB static docs site uploads as 22 MiB). `--compress` compresses each file before upload and tags it with `Content-Encoding`; gateways return that header, and browsers decompress transparently.
+
+```bash
+ario-deploy deploy --wallet ./wallet.json --deploy-folder ./out --compress gzip
+```
+
+In the GitHub Action:
+
+```yaml
+- uses: ar-io/ar-io-deploy@v1
+  with:
+    deploy-key: ${{ secrets.DEPLOY_KEY }}
+    deploy-folder: ./dist
+    compress: gzip
+    compress-exclude: 'llms*.txt,*.md'
+```
+
+- **Prefer `gzip`.** Gateways send the encoded bytes to every client, whether or not it asked for compression. Every browser and HTTP library understands gzip; `br` is ~15% smaller but some non-browser clients cannot decode it.
+- **Formats that are already compressed** (images, fonts, video, archives) are uploaded as-is, as is any file compression would make larger.
+- **Exclude files meant for non-browser clients** with `--compress-exclude`, e.g. text files that tools fetch with `curl`: `--compress-exclude "llms*.txt,*.md"`. A pattern without `/` matches the file name in any directory.
+- **Gateways must label items they have not indexed yet.** Right after a deploy, a gateway may serve a data item before it has indexed the item's tags. An ar-io-node without the fix for that (ar-io-node #964/#966) sends the gzip bytes with no `Content-Encoding` header, and browsers render garbage until the item is indexed -- or indefinitely, on a gateway that never indexes the bundle. The ar.io and Turbo gateways (`turbo-gateway.com`, `ardrive.net`, and those serving `*.ar.io`) have the fix; other operators get it by upgrading. Deploy to a test undername first and load it through each gateway that matters, including through Wayfinder, which may pick any gateway.
+- **Deduplication still works.** Compressed uploads are cached under their own key, so turning compression on re-uploads each file once, and later deploys skip unchanged files as usual.
 
 ## Package.json Scripts
 

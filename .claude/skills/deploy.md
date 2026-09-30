@@ -135,22 +135,25 @@ After successful deployment, report:
 
 ## Common Flags Reference
 
-| Flag                  | Description                                 | Default   |
-| --------------------- | ------------------------------------------- | --------- |
-| `--deploy-folder, -d` | Folder to deploy                            | `./dist`  |
-| `--deploy-file, -f`   | Single file to deploy                       | —         |
-| `--sig-type, -s`      | Upload signer type                          | `arweave` |
-| `--wallet, -w`        | Upload wallet file path                     | —         |
-| `--private-key, -k`   | Upload private key string                   | —         |
-| `--arns-wallet`       | ArNS authority wallet file (Solana id.json) | —         |
-| `--arns-private-key`  | ArNS authority key string (base58)          | —         |
-| `--arns-name, -n`     | ArNS name to update                         | —         |
-| `--undername, -u`     | Subdomain/undername                         | `@`       |
-| `--ttl-seconds, -t`   | TTL for ArNS record                         | `60`      |
-| `--cluster, -p`       | Solana cluster                              | `mainnet` |
-| `--on-demand`         | Auto-fund token type                        | —         |
-| `--max-token-amount`  | Max spend for on-demand                     | —         |
-| `--no-dedupe`         | Skip deduplication cache                    | `false`   |
+| Flag                  | Description                                 | Default    |
+| --------------------- | ------------------------------------------- | ---------- |
+| `--deploy-folder, -d` | Folder to deploy                            | `./dist`   |
+| `--deploy-file, -f`   | Single file to deploy                       | —          |
+| `--sig-type, -s`      | Upload signer type                          | `arweave`  |
+| `--wallet, -w`        | Upload wallet file path                     | —          |
+| `--private-key, -k`   | Upload private key string                   | —          |
+| `--arns-wallet`       | ArNS authority wallet file (Solana id.json) | —          |
+| `--arns-private-key`  | ArNS authority key string (base58)          | —          |
+| `--arns-name, -n`     | ArNS name to update                         | —          |
+| `--undername, -u`     | Subdomain/undername                         | `@`        |
+| `--ttl-seconds, -t`   | TTL for ArNS record                         | `60`       |
+| `--cluster, -p`       | Solana cluster                              | `mainnet`  |
+| `--on-demand`         | Auto-fund token type                        | —          |
+| `--max-token-amount`  | Max spend for on-demand                     | —          |
+| `--no-dedupe`         | Skip deduplication cache                    | `false`    |
+| `--compress`          | Compress uploads: `gzip`, `br` or `none`    | `none`     |
+| `--compress-exclude`  | Globs to upload uncompressed                | —          |
+| `--fallback-file`     | Path served for unlisted routes (SPAs)      | `404.html` |
 
 ## Interactive Mode
 
@@ -214,16 +217,18 @@ For PR previews:
 
 ## Troubleshooting
 
-| Error                          | Solution                                                                                  |
-| ------------------------------ | ----------------------------------------------------------------------------------------- |
-| "DEPLOY_KEY not set"           | Set `DEPLOY_KEY` env var or use `--wallet`/`--private-key`                                |
-| "deploy-folder does not exist" | Build first (`npm run build`) or specify correct path                                     |
-| "ArNS name does not exist"     | Verify the name exists at https://arns.ar.io                                              |
-| "Insufficient Turbo Credits"   | Use `--on-demand ario` or fund wallet at https://turbo.ardrive.io                         |
-| ArNS update fails              | Ensure `ARNS_KEY` or `--arns-wallet` is set with a Solana key that controls the ArNS name |
+| Error                                          | Solution                                                                                                                                                   |
+| ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| "DEPLOY_KEY not set"                           | Set `DEPLOY_KEY` env var or use `--wallet`/`--private-key`                                                                                                 |
+| "deploy-folder does not exist"                 | Build first (`npm run build`) or specify correct path                                                                                                      |
+| "ArNS name does not exist"                     | Verify the name exists at https://arns.ar.io                                                                                                               |
+| "Insufficient Turbo Credits"                   | Use `--on-demand ario` or fund wallet at https://turbo.ardrive.io                                                                                          |
+| Pages show garbage after a `--compress` deploy | The gateway served an unindexed item without `Content-Encoding` (needs ar-io-node #964/#966). Use a gateway with the fix, or redeploy without `--compress` |
+| ArNS update fails                              | Ensure `ARNS_KEY` or `--arns-wallet` is set with a Solana key that controls the ArNS name                                                                  |
 
 ## Important Notes
 
 - **Arweave uploads are permanent** — verify your build has no secrets before deploying
-- **Deduplication is on by default** — unchanged files are not re-uploaded (saves cost)
+- **Deduplication is on by default** — unchanged files are not re-uploaded, and identical files within one deploy are uploaded once (saves cost). The credit check prices only what will actually be uploaded
+- **Compression (`--compress gzip`) cuts upload cost ~5-8x for HTML/JS/CSS/JSON** — suggest it for static sites, with `--compress-exclude "llms*.txt,*.md"` for files plain HTTP clients fetch. Recommend deploying to a test undername first: gateways must send `Content-Encoding` for items they have not indexed yet (ar.io/Turbo gateways do; others need ar-io-node #964/#966)
 - **Cache location**: `.ario-deploy/transaction-cache.json` — commit it to share with team or gitignore it

@@ -1,5 +1,4 @@
 import fs from 'node:fs'
-import path from 'node:path'
 
 import {
   ARIOToTokenAmount,
@@ -13,12 +12,23 @@ import ora from 'ora'
 import type { SignerType } from '../types/index.js'
 import { cleanupCache, loadCache, saveCache } from '../utils/cache.js'
 import { chalk } from '../utils/chalk.js'
+import { parseCompressionConfig } from '../utils/compression.js'
 import { expandPath } from '../utils/path.js'
 import { createSigner } from '../utils/signer.js'
 import type { UploadClient, UploadCost, UploadSize } from '../utils/upload-types.js'
-import { type FolderUploadResult, uploadFile, uploadFolder } from '../utils/uploader.js'
+import {
+  type FolderUploadPlan,
+  type FolderUploadResult,
+  planFolderUpload,
+  uploadFile,
+  uploadFolder,
+} from '../utils/uploader.js'
 
 export interface UploadWorkflowConfig {
+  /** Content-Encoding to compress uploads with: gzip, br, or none. */
+  compress?: string
+  /** Comma-separated globs of files to upload uncompressed. */
+  'compress-exclude'?: string
   'dedupe-cache-max-entries': number
   'deploy-file'?: string
   'deploy-folder': string
@@ -30,17 +40,10 @@ export interface UploadWorkflowConfig {
   uploader?: string
 }
 
-function getFolderSize(folderPath: string): number {
-  let totalSize = 0
-
-  for (const item of fs.readdirSync(folderPath)) {
-    const fullPath = path.join(folderPath, item)
-    const stats = fs.statSync(fullPath)
-
-    totalSize += stats.isDirectory() ? getFolderSize(fullPath) : stats.size
-  }
-
-  return totalSize
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`
+  return `${(bytes / 1024 / 1024).toFixed(1)} MiB`
 }
 
 export interface UploadWorkflowIo {
@@ -113,19 +116,45 @@ export async function runUploadWorkflow(
     })
   }
 
+  const compression = parseCompressionConfig(config.compress, config['compress-exclude'])
+  const useCache = config['dedupe-cache-max-entries'] > 0
+
+  /*
+   * Plan a folder upload up front: hash every file, skip what the dedupe
+   * cache already holds, share uploads between identical files and compress.
+   * The credit check then prices what will actually be sent, not the whole
+   * folder -- pricing the folder demanded a full-site balance for a one-page
+   * change -- and the upload reuses the plan instead of redoing the work.
+   */
+  let folderPlan: FolderUploadPlan | undefined
+  if (!config['deploy-file']) {
+    spinner.start('Planning upload')
+    try {
+      folderPlan = await planFolderUpload(expandPath(config['deploy-folder']), {
+        cache: useCache ? loadCache() : {},
+        compression,
+      })
+    } catch (planError) {
+      spinner.fail('Failed to plan upload')
+      const errorMessage = planError instanceof Error ? planError.message : String(planError)
+      io.error(`Failed to plan upload: ${errorMessage}`)
+    }
+
+    const { cacheHits, duplicates, files, uploadBytes } = folderPlan
+    const toUpload = files.length - cacheHits - duplicates
+    spinner.succeed(
+      `Upload planned: ${toUpload} of ${files.length} files to upload (${formatBytes(uploadBytes)}` +
+        `${compression ? ` after ${compression.encoding}` : ''}), ${cacheHits} cached, ${duplicates} duplicates`,
+    )
+  }
+
   if (!fundingMode && turbo) {
     spinner.start('Checking Turbo credits for upload')
 
     try {
-      const uploadBytes = config['deploy-file']
-        ? (() => {
-            const filePath = expandPath(config['deploy-file']!)
-            return fs.statSync(filePath).size
-          })()
-        : (() => {
-            const folderPath = expandPath(config['deploy-folder']!)
-            return getFolderSize(folderPath)
-          })()
+      const uploadBytes = folderPlan
+        ? folderPlan.uploadBytes + folderPlan.manifestBytes
+        : fs.statSync(expandPath(config['deploy-file']!)).size
 
       const FREE_THRESHOLD_BYTES = 107_520 // ~105 KiB
 
@@ -167,8 +196,12 @@ export async function runUploadWorkflow(
       const filePath = expandPath(config['deploy-file'])
       spinner.start(`Uploading file ${chalk.yellow(config['deploy-file'])}`)
 
-      let cache = config['dedupe-cache-max-entries'] > 0 ? loadCache() : {}
-      const uploadResult = await uploadFile(uploadClient, filePath, { cache, fundingMode })
+      let cache = useCache ? loadCache() : {}
+      const uploadResult = await uploadFile(uploadClient, filePath, {
+        cache,
+        compression,
+        fundingMode,
+      })
 
       if (!uploadResult.transactionId) {
         spinner.fail('File upload failed: no transaction ID returned')
@@ -195,11 +228,11 @@ export async function runUploadWorkflow(
       const folderPath = expandPath(config['deploy-folder'])
       spinner.start(`Uploading folder ${chalk.yellow(config['deploy-folder'])}`)
 
-      let cache = config['dedupe-cache-max-entries'] > 0 ? loadCache() : {}
       const uploadResult: FolderUploadResult = await uploadFolder(uploadClient, folderPath, {
-        cache,
+        compression,
         fallbackFile: config['fallback-file'],
         fundingMode,
+        plan: folderPlan,
         throwOnFailure: true,
       })
 
@@ -212,15 +245,17 @@ export async function runUploadWorkflow(
       cost = uploadResult.cost
       size = uploadResult.size
 
-      if (uploadResult.updatedCache && config['dedupe-cache-max-entries'] > 0) {
-        cache = cleanupCache(uploadResult.updatedCache, config['dedupe-cache-max-entries'])
-        saveCache(cache)
+      if (uploadResult.updatedCache && useCache) {
+        saveCache(cleanupCache(uploadResult.updatedCache, config['dedupe-cache-max-entries']))
       }
 
-      const { cacheHits, totalFiles, uploaded } = uploadResult
+      const { cacheHits, duplicates, totalFiles, uploaded } = uploadResult
+      const sharedMsg = duplicates > 0 ? `, ${duplicates} duplicates shared` : ''
       const statsMsg =
-        cacheHits > 0
-          ? chalk.gray(` (${cacheHits}/${totalFiles} files cached, ${uploaded} uploaded)`)
+        cacheHits > 0 || duplicates > 0
+          ? chalk.gray(
+              ` (${cacheHits}/${totalFiles} files cached${sharedMsg}, ${uploaded} uploaded)`,
+            )
           : ''
 
       if (uploadResult.cacheHit) {
