@@ -67,7 +67,7 @@ export const globalFlags = {
     flag: Flags.string({
       default: 'none',
       description:
-        'Compress files before upload and tag them with Content-Encoding (gzip or br). Gateways serve the encoded bytes to every client, so prefer gzip unless you know your clients accept br. Already-compressed formats (images, fonts, video, archives) are uploaded as-is.',
+        'Compress files before upload and tag them with Content-Encoding (gzip or br). Gateways serve the encoded bytes to every client, so prefer gzip unless you know your clients accept br. Already-compressed formats (JPEG, PNG, GIF, WebP, AVIF, WOFF/WOFF2, MP3, MP4, WebM, zip/gz and other archives) are uploaded as-is.',
       options: ['none', ...CONTENT_ENCODINGS],
       required: false,
     }),

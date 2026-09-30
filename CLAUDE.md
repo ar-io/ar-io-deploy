@@ -39,7 +39,7 @@ All CLI flags are defined in `src/constants/flags.ts` as a single source of trut
 
 ### Upload Flow
 
-`src/workflows/upload-workflow.ts` orchestrates: create signer -> init Turbo client -> handle on-demand funding (with 10% buffer) -> plan the folder upload (`planFolderUpload`: hash, cache lookup, chain lookup with `--incremental`, in-run dedupe, compression) -> credit check priced on the plan (`uploadBytes` + `manifestBytes`) -> upload -> return tx ID. The plan is computed once and reused by `uploadFolder`, so the credit check prices exactly what will be sent, not the whole folder, in every mode.
+`src/workflows/upload-workflow.ts` orchestrates: create signer -> init Turbo client -> handle on-demand funding (with 10% buffer) -> plan the folder upload (`planFolderUpload`: hash, cache lookup, chain lookup with `--incremental`, in-run dedupe, compression) -> credit check priced on the plan (`uploadBytes` + `manifestBytes`) -> upload -> return tx ID. The plan is computed once and reused by `uploadFolder`, so for folder uploads the credit check prices exactly what will be sent, not the whole folder. `--deploy-file` has no plan and prices the file's raw size; `--on-demand` skips the check.
 
 ### Compression
 

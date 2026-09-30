@@ -366,7 +366,7 @@ The Turbo credit check runs after this planning step, so it prices only what wil
 
 **Disable deduplication:**
 
-If you need to force a fresh upload of all files (e.g., for debugging or to ensure a completely new deployment):
+If you need to force a fresh upload of all files (e.g., for debugging or to ensure a completely new deployment). Files that are identical within the same deploy are still uploaded once and share a transaction, since that reuses nothing from earlier deploys:
 
 ```bash
 ario-deploy deploy --wallet ./wallet.json --no-dedupe
@@ -410,9 +410,9 @@ Measured on a 1,229-file static docs site, redeployed from a fresh CI runner wit
 
 **Why the on-chain lookup matters:** every uploaded file carries a `File-SHA256` tag, which makes it findable again from nothing but the bytes on disk. That is what a CI job needs. CI runs from a fresh checkout, so `.ario-deploy/transaction-cache.json` is often missing or stale even with `actions/cache` restoring it — and without the on-chain lookup every redeploy pays for the whole bundle again.
 
-**The tag invariant:** a data item's id covers its tags, so a tag whose value changes between deploys — a commit SHA above all — moves every file's id on every deploy and defeats deduplication. The failure is silent: the upload succeeds, the manifest is correct, and the bill doubles. In incremental mode files therefore carry only deploy-invariant tags (`App-Name`, `Content-Type`, `File-SHA256`), and the `GIT-HASH` provenance tag rides on the manifest instead, which is rewritten every deploy anyway. The tag set is asserted in code, so a future addition fails loudly rather than quietly costing money.
+**The tag invariant:** a data item's id covers its tags, so a tag whose value changes between deploys — a commit SHA above all — moves every file's id on every deploy and defeats deduplication. The failure is silent: the upload succeeds, the manifest is correct, and the bill doubles. In incremental mode files therefore carry only deploy-invariant tags (`App-Name`, `Content-Type`, `File-SHA256`, plus `Content-Encoding` when compressed), and the `GIT-HASH` provenance tag rides on the manifest instead, which is rewritten every deploy anyway. The tag set is asserted in code, so a future addition fails loudly rather than quietly costing money.
 
-**Reuse is keyed on content type as well as content.** Two files with identical bytes served under different types — `a.json` and `b.txt` — stay two uploads, because a gateway serves whatever `Content-Type` the data item carries and collapsing them would serve one of them as the other. Cache entries written in incremental mode are therefore keyed `<sha256>|<mime-type>`; entries written by a plain (non-incremental) run stay keyed on the bare hash, so switching a project to `--incremental` re-uploads once and is cheap from then on.
+**Reuse is keyed on content type as well as content.** Two files with identical bytes served under different types — `a.json` and `b.txt` — stay two uploads, because a gateway serves whatever `Content-Type` the data item carries and collapsing them would serve one of them as the other. Cache entries written in incremental mode are therefore keyed `<sha256>|<mime-type>` (plus `|<encoding>` when compressed); entries written by a plain (non-incremental) run stay keyed on the bare hash, so switching a project to `--incremental` re-uploads once and is cheap from then on.
 
 **What it trusts:** only your own wallet's past transactions, matched on the 43-character address a gateway indexes an owner as — derived locally as `base64url(sha256(publicKey))`, which is correct for all five signer types. Every result is then re-checked here against the owner and the content type the gateway itself reports, because the `owners` filter is applied by whichever host `--incremental-gateway` names, and a wrong id would land in both the permanent manifest and the local cache.
 
@@ -421,7 +421,7 @@ Measured on a 1,229-file static docs site, redeployed from a fresh CI runner wit
 - **Lookups are batched.** Hashes are sent 100 per GraphQL request, because gateways cap the size of a query (an ar.io gateway refuses ~1,100 hashes with "Max query size exceeded"). A site of any size is covered; each batch is paged until its files are accounted for, up to 20 pages.
 - **The credits pre-flight prices only what will be sent**: the files still to upload plus an estimate of the manifest, which is uploaded on every deploy. A fully reused redeploy is priced at the manifest alone.
 - **Gateway GraphQL indexing lags an upload by a few minutes.** Two machines deploying the same _new_ file at the same moment can each pay for it. It costs a fraction of a cent and never produces a wrong manifest.
-- **A gateway that is slow, unreachable or erroring costs reuse, not correctness.** Requests that fail transiently (HTTP 429 or 5xx, a timeout, a network error) are retried twice with a short backoff. A batch that still fails costs only its own files, which are uploaded again, and the run says how many batches it could not look up. If no batch can be looked up at all, the run warns and uploads everything.
+- **A gateway that is slow, unreachable or erroring costs reuse, not correctness.** Requests that fail transiently (HTTP 429 or 5xx, a timeout, a network error) are retried twice with a short backoff. A batch that still fails costs only its own files, which are uploaded again, and the run says how many batches it could not look up. If no batch can be looked up at all, the run warns and uploads everything the local cache does not already hold.
 - **A doomed deploy takes longer to say so.** Every queued upload settles before a failure is reported, so a systemic failure (bad credentials, exhausted credits) on a very large folder surfaces at the end rather than immediately. The same uploads were always attempted, so the bill is unchanged; the alternative stranded ids that had been paid for and never written down.
 - **Ignored for `--deploy-file`.** Reuse works through the manifest, and a single file has no manifest. The run warns rather than silently doing nothing.
 - **Cache entries are keyed differently in each mode**, so a project that toggles `--incremental` on and off stores up to two entries per file against the shared `--dedupe-cache-max-entries` cap: `<sha256>` (or `gzip:<sha256>` when compressed) without it, and `<sha256>|<mime-type>` (or `<sha256>|<mime-type>|gzip`) with it.
@@ -431,7 +431,7 @@ Measured on a 1,229-file static docs site, redeployed from a fresh CI runner wit
 - Off by default. Nothing changes for an existing pipeline until you pass the flag.
 - Refused alongside `--no-dedupe` or `--dedupe-cache-max-entries 0`, which ask for the opposite.
 - Works with `--compress`: each file's `File-SHA256` is the hash of the file on disk, and a compressed upload also carries `Content-Encoding`, so a lookup only ever reuses an upload made with the same encoding. Turning compression on or off uploads each file once more, then reuse resumes.
-- The lookup uses `https://turbo-gateway.com/graphql` by default, where uploads made through Turbo are indexed within minutes (typically about five), before they are bundled into a block. Override it with `--incremental-gateway` — for example when uploading through another bundler with `--uploader`.
+- The lookup uses `https://turbo-gateway.com/graphql` by default, where uploads made through Turbo are indexed within minutes (about 5-7 in our measurements), before they are bundled into a block. Override it with `--incremental-gateway` — for example when uploading through another bundler with `--uploader`.
 
 ## Compression
 
@@ -441,10 +441,10 @@ Arweave storage is priced per byte, and HTML, JavaScript, CSS and JSON typically
 ario-deploy deploy --wallet ./wallet.json --deploy-folder ./out --compress gzip
 ```
 
-In the GitHub Action:
+In the GitHub Action (`compress` needs v1.1.0 or later; pin the version, since the floating `v1` tag is moved by hand and may lag):
 
 ```yaml
-- uses: ar-io/ar-io-deploy@v1
+- uses: ar-io/ar-io-deploy@v1.1.0
   with:
     deploy-key: ${{ secrets.DEPLOY_KEY }}
     deploy-folder: ./dist
@@ -452,8 +452,8 @@ In the GitHub Action:
     compress-exclude: 'llms*.txt,*.md'
 ```
 
-- **Prefer `gzip`.** Gateways send the encoded bytes to every client, whether or not it asked for compression. Every browser and HTTP library understands gzip; `br` is ~15% smaller but some non-browser clients cannot decode it.
-- **Formats that are already compressed** (images, fonts, video, archives) are uploaded as-is. Every other file is compressed, even a tiny one gzip makes a few bytes larger, so its tags always match how it was planned.
+- **Prefer `gzip`.** Gateways send the encoded bytes to every client, whether or not it asked for compression. Every browser and HTTP library understands gzip; `br` was ~17% smaller than gzip on a static docs site, but some non-browser clients cannot decode it.
+- **Formats that are already compressed** are uploaded as-is: already-compressed formats (JPEG, PNG, GIF, WebP, AVIF, HEIC, WOFF/WOFF2, MP3, M4A, Ogg/Opus, MP4, WebM, and zip/gz/br/bz2/xz/zst/7z/rar archives). Other images and fonts (`.svg`, `.ico`, `.ttf`, `.otf`) are compressed. Every other file is compressed, even a tiny one gzip makes a few bytes larger, so its tags always match how it was planned.
 - **Exclude files meant for non-browser clients** with `--compress-exclude`, e.g. text files that tools fetch with `curl`: `--compress-exclude "llms*.txt,*.md"`. A pattern without `/` matches the file name in any directory.
 - **Gateways must label items they have not indexed yet.** Right after a deploy, a gateway may serve a data item before it has indexed the item's tags. An ar-io-node without the fix for that (ar-io-node #964/#966) sends the gzip bytes with no `Content-Encoding` header, and browsers render garbage until the item is indexed -- or indefinitely, on a gateway that never indexes the bundle. The ar.io and Turbo gateways (`turbo-gateway.com`, `ardrive.net`, and those serving `*.ar.io`) have the fix; other operators get it by upgrading. Deploy to a test undername first and load it through each gateway that matters, including through Wayfinder, which may pick any gateway.
 - **Deduplication still works**, including `--incremental`. Compressed uploads are cached (and found on chain) under their own key, so turning compression on re-uploads each file once, and later deploys skip unchanged files as usual.
@@ -638,11 +638,11 @@ You can also limit the cache size:
 
 ### Incremental Uploads
 
-A CI job runs from a fresh checkout, so the restored transaction cache is often missing or stale — and then every redeploy pays for the whole bundle again. `incremental: 'true'` recovers those transaction ids from your wallet's own past uploads on chain, so only the files that actually changed are paid for. See [Incremental uploads](#incremental-uploads).
+A CI job runs from a fresh checkout, so the restored transaction cache is often missing or stale — and then every redeploy pays for the whole bundle again. `incremental: 'true'` recovers those transaction ids from your wallet's own past uploads on chain, so only the files that actually changed are paid for. See [Incremental uploads](#incremental-uploads). Requires v1.2.0 or later; pin the version, since the floating `v1` tag may lag.
 
 ```yaml
 - name: Deploy only what changed
-  uses: ar-io/ar-io-deploy@v1.0.0
+  uses: ar-io/ar-io-deploy@v1.2.0
   with:
     deploy-key: ${{ secrets.DEPLOY_KEY }}
     deploy-folder: ./dist

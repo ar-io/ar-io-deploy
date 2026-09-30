@@ -76,11 +76,11 @@ inputs:
     description: 'Gateway whose GraphQL endpoint is queried for past uploads when incremental is enabled. Defaults to https://turbo-gateway.com, where Turbo uploads are indexed first.'
     required: false
   compress:
-    description: 'Compress files before upload and tag them with Content-Encoding: gzip, br, or none. Gateways serve the encoded bytes to every client, so prefer gzip unless you know your clients accept br. Images, fonts, video and archives are uploaded as-is.'
+    description: 'Compress files before upload and tag them with Content-Encoding: gzip, br, or none. Gateways serve the encoded bytes to every client, so prefer gzip unless you know your clients accept br. Already-compressed formats (JPEG, PNG, GIF, WebP, AVIF, WOFF/WOFF2, MP3, MP4, WebM, zip/gz and other archives) are uploaded as-is.'
     required: false
     default: 'none'
   compress-exclude:
-    description: 'Comma-separated globs of files to upload uncompressed (e.g. "llms*.txt,*.md"). A pattern without "/" matches the file name in any directory.'
+    description: 'Comma-separated globs of files to upload uncompressed (e.g. "llms*.txt,*.md"). A pattern without "/" matches the file name in any directory. No spaces: the value is passed to the CLI unquoted.'
     required: false
 
 outputs:

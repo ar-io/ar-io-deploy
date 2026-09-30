@@ -153,7 +153,7 @@ After successful deployment, report:
 | `--no-dedupe`           | Skip deduplication cache                                     | `false`                     |
 | `--compress`            | Compress uploads: `gzip`, `br` or `none`                     | `none`                      |
 | `--compress-exclude`    | Globs to upload uncompressed                                 | —                           |
-| `--fallback-file`       | Path served for unlisted routes (SPAs)                       | `404.html`                  |
+| `--fallback-file`       | Path served for unlisted routes (SPAs)                       | `404.html` if present       |
 | `--incremental`         | Reuse files already on Arweave (finds past uploads on chain) | `false`                     |
 | `--incremental-gateway` | Gateway queried for past uploads                             | `https://turbo-gateway.com` |
 
@@ -233,5 +233,5 @@ For PR previews:
 - **Arweave uploads are permanent** — verify your build has no secrets before deploying
 - **Deduplication is on by default** — unchanged files are not re-uploaded, and identical files within one deploy are uploaded once (saves cost). The credit check prices only what will actually be uploaded
 - **Compression (`--compress gzip`) cuts upload cost ~5-8x for HTML/JS/CSS/JSON** — suggest it for static sites, with `--compress-exclude "llms*.txt,*.md"` for files plain HTTP clients fetch. Recommend deploying to a test undername first: gateways must send `Content-Encoding` for items they have not indexed yet (ar.io/Turbo gateways do; others need ar-io-node #964/#966)
-- **Incremental uploads (`--incremental`) make CI redeploys cheap** — suggest it whenever deploys run in CI or on more than one machine. Each file is tagged with its content hash and later deploys find those uploads on chain, so a fresh checkout with no cache pays only for changed files. Uploads need about five minutes to become findable, so a redeploy seconds later may re-upload. Not combinable with `--no-dedupe`; ignored for `--deploy-file`
+- **Incremental uploads (`--incremental`) make CI redeploys cheap** — suggest it whenever deploys run in CI or on more than one machine. Each file is tagged with its content hash and later deploys find those uploads on chain, so a fresh checkout with no cache pays only for changed files. Uploads take about 5-7 minutes to become findable, so a redeploy seconds later may re-upload. Not combinable with `--no-dedupe` or `--dedupe-cache-max-entries 0`; ignored for `--deploy-file`
 - **Cache location**: `.ario-deploy/transaction-cache.json` — commit it to share with team or gitignore it
