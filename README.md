@@ -396,6 +396,7 @@ ario-deploy deploy --wallet ./wallet.json --deploy-folder ./out --compress gzip
 - **Prefer `gzip`.** Gateways send the encoded bytes to every client, whether or not it asked for compression. Every browser and HTTP library understands gzip; `br` is ~15% smaller but some non-browser clients cannot decode it.
 - **Formats that are already compressed** (images, fonts, video, archives) are uploaded as-is, as is any file compression would make larger.
 - **Exclude files meant for non-browser clients** with `--compress-exclude`, e.g. text files that tools fetch with `curl`: `--compress-exclude "llms*.txt,*.md"`. A pattern without `/` matches the file name in any directory.
+- **Check the gateways your readers use before enabling it.** A gateway returns `Content-Encoding` from the data item's tag without looking at the request, and not every gateway serves the stored bytes unchanged: at the time of writing, some return the already-decompressed body with the `gzip` header still attached, which browsers reject. Deploy to a test undername first and load it through each gateway that matters (and through Wayfinder, which may pick any gateway).
 - **Deduplication still works.** Compressed uploads are cached under their own key, so turning compression on re-uploads each file once, and later deploys skip unchanged files as usual.
 
 ## Package.json Scripts

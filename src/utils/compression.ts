@@ -109,9 +109,10 @@ export function shouldCompress(relativePath: string, config: CompressionConfig):
 /**
  * Compress `data` with the given encoding.
  *
- * Settings are fixed so the same input always yields the same bytes. That is
- * not what deduplication keys on (the cache uses the original file's hash),
- * but it keeps re-runs byte-identical and easy to reason about.
+ * Settings are fixed, so repeat runs on one machine yield the same bytes.
+ * (gzip records the OS in its header, so output can differ across
+ * platforms.) Deduplication does not depend on this: the cache keys on the
+ * original file's hash plus the encoding.
  */
 export async function compress(data: Buffer, encoding: ContentEncoding): Promise<Buffer> {
   if (encoding === 'gzip') {

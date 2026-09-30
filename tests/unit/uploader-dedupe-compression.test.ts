@@ -94,6 +94,19 @@ describe('in-run deduplication', () => {
     expect(result.uploaded).toBe(2)
   })
 
+  it('keeps identical files with different Content-Types separate', async () => {
+    // Sharing would serve data.txt with the application/json tag of data.json.
+    write('data.json', PAGE)
+    write('data.txt', PAGE)
+
+    const { client, uploads } = stubClient()
+    const result = await uploadFolder(client, folder, { cache: {} })
+    const types = uploads.filter((u) => !isManifest(u)).map((u) => u.tags['Content-Type'])
+
+    expect(result.duplicates).toBe(0)
+    expect(types.sort()).toEqual(['application/json', 'text/plain'])
+  })
+
   it('does not count a duplicate as a cache hit', async () => {
     write('a.txt', PAGE)
     write('b.txt', PAGE)

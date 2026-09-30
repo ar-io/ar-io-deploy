@@ -241,12 +241,15 @@ export async function planFolderUpload(
       continue
     }
 
-    const first = firstUpload.get(file.cacheKey)
+    // Share only between files that would also get the same Content-Type
+    // tag: identical bytes named data.json and data.txt must stay separate.
+    const shareKey = `${mime.lookup(file.fullPath) || ''}|${file.cacheKey}`
+    const first = firstUpload.get(shareKey)
     if (first) {
       file.duplicateOf = first.relativePath
       duplicates++
     } else {
-      firstUpload.set(file.cacheKey, file)
+      firstUpload.set(shareKey, file)
     }
   }
 
