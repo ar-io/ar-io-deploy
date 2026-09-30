@@ -343,7 +343,7 @@ ArNS authority key (controls the name, signs the update — always Solana):
 - `--compress-exclude`: Comma-separated globs of files to upload uncompressed, e.g. `"llms*.txt,*.md"`
 - `--uploader`: Custom Turbo upload service base URL. See the **Bundler service** section.
 
-**`upload`** (explicit upload without ArNS): accepts `--deploy-folder`, `--deploy-file`, wallet/signer flags, `--uploader`, `--on-demand` / `--max-token-amount`, and dedupe flags only.
+**`upload`** (explicit upload without ArNS): accepts `--deploy-folder`, `--deploy-file`, `--fallback-file`, wallet/signer flags, `--uploader`, `--on-demand` / `--max-token-amount`, dedupe flags, and `--compress` / `--compress-exclude` only.
 
 ## Deduplication
 
@@ -387,16 +387,27 @@ The cache file is stored at `.ario-deploy/transaction-cache.json` in your projec
 
 ## Compression
 
-Arweave storage is priced per byte, and HTML, JavaScript, CSS and JSON typically shrink 5-8x when compressed. `--compress` compresses each file before upload and tags it with `Content-Encoding`; ar.io gateways (Release 16 and later) return that header, and browsers decompress transparently.
+Arweave storage is priced per byte, and HTML, JavaScript, CSS and JSON typically shrink 5-8x when compressed (a 169 MB static docs site uploads as 22 MiB). `--compress` compresses each file before upload and tags it with `Content-Encoding`; gateways return that header, and browsers decompress transparently.
 
 ```bash
 ario-deploy deploy --wallet ./wallet.json --deploy-folder ./out --compress gzip
 ```
 
+In the GitHub Action:
+
+```yaml
+- uses: ar-io/ar-io-deploy@v1
+  with:
+    deploy-key: ${{ secrets.DEPLOY_KEY }}
+    deploy-folder: ./dist
+    compress: gzip
+    compress-exclude: 'llms*.txt,*.md'
+```
+
 - **Prefer `gzip`.** Gateways send the encoded bytes to every client, whether or not it asked for compression. Every browser and HTTP library understands gzip; `br` is ~15% smaller but some non-browser clients cannot decode it.
 - **Formats that are already compressed** (images, fonts, video, archives) are uploaded as-is, as is any file compression would make larger.
 - **Exclude files meant for non-browser clients** with `--compress-exclude`, e.g. text files that tools fetch with `curl`: `--compress-exclude "llms*.txt,*.md"`. A pattern without `/` matches the file name in any directory.
-- **Check the gateways your readers use before enabling it.** A gateway returns `Content-Encoding` from the data item's tag without looking at the request, and not every gateway serves the stored bytes unchanged: at the time of writing, some return the already-decompressed body with the `gzip` header still attached, which browsers reject. Deploy to a test undername first and load it through each gateway that matters (and through Wayfinder, which may pick any gateway).
+- **Gateways must label items they have not indexed yet.** Right after a deploy, a gateway may serve a data item before it has indexed the item's tags. An ar-io-node without the fix for that (ar-io-node #964/#966) sends the gzip bytes with no `Content-Encoding` header, and browsers render garbage until the item is indexed -- or indefinitely, on a gateway that never indexes the bundle. The ar.io and Turbo gateways (`turbo-gateway.com`, `ardrive.net`, and those serving `*.ar.io`) have the fix; other operators get it by upgrading. Deploy to a test undername first and load it through each gateway that matters, including through Wayfinder, which may pick any gateway.
 - **Deduplication still works.** Compressed uploads are cached under their own key, so turning compression on re-uploads each file once, and later deploys skip unchanged files as usual.
 
 ## Package.json Scripts
