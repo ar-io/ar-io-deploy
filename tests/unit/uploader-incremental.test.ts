@@ -319,19 +319,29 @@ describe('planFolderUpload as a public API', () => {
     const plan = await planFolderUpload(folder, { cache, incremental: {} })
 
     // Only the changed file, not the 350-byte folder.
-    expect(plan.pendingBytes).toBe(250)
-    expect(plan.uploadTargets).toHaveLength(1)
+    expect(plan.uploadBytes).toBe(250)
+    expect(plan.files.filter((file) => !file.cached && !file.duplicateOf)).toHaveLength(1)
   })
 
-  it('does not stat files whose size nothing will read', async () => {
+  it('sizes only the files that will be uploaded', async () => {
     write('a.txt', 'x'.repeat(100))
+    write('b.txt', 'y'.repeat(250))
 
-    // Outside incremental mode no plan is ever priced, and a statSync per file
-    // is a blocking syscall bought for nothing on a 10k-file folder.
-    const plan = await planFolderUpload(folder, { cache: {} })
+    let cache: TransactionCache = {}
+    await uploadFolder(stubClient().client, folder, {
+      cache,
+      incremental: {
+        onCacheUpdate(updated) {
+          cache = updated
+        },
+      },
+    })
 
-    expect(plan.tasks[0].bytes).toBe(0)
-    expect(plan.pendingBytes).toBe(0)
+    // Nothing changed: every file is reused, so none is read or sized.
+    const plan = await planFolderUpload(folder, { cache, incremental: {} })
+
+    expect(plan.files.every((file) => file.uploadBytes === 0)).toBe(true)
+    expect(plan.uploadBytes).toBe(0)
   })
 })
 

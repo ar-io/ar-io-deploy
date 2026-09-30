@@ -36,6 +36,7 @@ Your app is now permanently live at `https://myapp.ar.io`.
 - [Command Options](#command-options)
 - [Deduplication](#deduplication)
 - [Incremental uploads](#incremental-uploads)
+- [Compression](#compression)
 - [Package.json Scripts](#packagejson-scripts)
 - [GitHub Action](#github-action)
 - [CLI in GitHub Actions](#cli-in-github-actions)
@@ -342,9 +343,11 @@ ArNS authority key (controls the name, signs the update — always Solana):
 - `--dedupe-cache-max-entries`: Maximum number of entries to keep in the dedupe cache (LRU). Default: `10000`
 - `--incremental`: Reuse files already on Arweave, including on a machine with no local cache. Off by default. Cannot be combined with `--no-dedupe` or `--dedupe-cache-max-entries 0`. See [Incremental uploads](#incremental-uploads).
 - `--incremental-gateway`: Gateway whose GraphQL endpoint is queried for past uploads when `--incremental` is set. Default: `https://arweave.net`
+- `--compress`: Compress files before upload and tag them with `Content-Encoding`. Choices: `gzip`, `br`, `none` (default). See [Compression](#compression).
+- `--compress-exclude`: Comma-separated globs of files to upload uncompressed, e.g. `"llms*.txt,*.md"`
 - `--uploader`: Custom Turbo upload service base URL. See the **Bundler service** section.
 
-**`upload`** (explicit upload without ArNS): accepts `--deploy-folder`, `--deploy-file`, wallet/signer flags, `--uploader`, `--on-demand` / `--max-token-amount`, and the dedupe and incremental flags only.
+**`upload`** (explicit upload without ArNS): accepts `--deploy-folder`, `--deploy-file`, `--fallback-file`, wallet/signer flags, `--uploader`, `--on-demand` / `--max-token-amount`, the dedupe and incremental flags, and `--compress` / `--compress-exclude` only.
 
 ## Deduplication
 
@@ -355,8 +358,11 @@ By default, ario-deploy caches your deployment log to prevent uploading duplicat
 1. When you deploy, ario-deploy hashes each file in your build
 2. It checks the local cache for matching hashes from previous uploads
 3. Files that haven't changed are skipped - the existing transaction ID is reused
-4. Only new or modified files are uploaded to Arweave
-5. The cache is stored locally in `.ario-deploy/transaction-cache.json`
+4. Files identical to another file in the same deploy are uploaded once and share its transaction (static exports often write the same payload under several names)
+5. Only new or modified files are uploaded to Arweave
+6. The cache is stored locally in `.ario-deploy/transaction-cache.json`
+
+The Turbo credit check runs after this planning step, so it prices only what will actually be uploaded, not the whole folder.
 
 **Disable deduplication:**
 
@@ -411,19 +417,44 @@ ario-deploy deploy --wallet ./wallet.json --incremental
 **Limits and caveats:**
 
 - **Recovery is capped at 2,000 files per deploy** (20 GraphQL pages of 100). Anything past that is uploaded rather than reused; nothing is ever wrong, only unreused.
-- **A fully reused redeploy skips the credits pre-flight**, since there are no pending bytes to price and the manifest itself is not quoted. Below the free-tier threshold that is right, but a manifest with many thousands of paths is not free, so a wallet at nearly zero credits could fail at the manifest rather than being refused up front.
+- **The credits pre-flight prices only what will be sent**: the files still to upload plus an estimate of the manifest, which is uploaded on every deploy. A fully reused redeploy is priced at the manifest alone.
 - **Gateway GraphQL indexing lags an upload by a few minutes.** Two machines deploying the same _new_ file at the same moment can each pay for it. It costs a fraction of a cent and never produces a wrong manifest.
 - **A gateway that is slow, unreachable or erroring costs reuse, not correctness.** Unresolved files are simply uploaded, and the run says so.
 - **A doomed deploy takes longer to say so.** Every queued upload settles before a failure is reported, so a systemic failure (bad credentials, exhausted credits) on a very large folder surfaces at the end rather than immediately. The same uploads were always attempted, so the bill is unchanged; the alternative stranded ids that had been paid for and never written down.
 - **Ignored for `--deploy-file`.** Reuse works through the manifest, and a single file has no manifest. The run warns rather than silently doing nothing.
-- **Cache entries are keyed differently in each mode**, so a project that toggles `--incremental` on and off stores up to two entries per file (`<sha256>` and `<sha256>|<mime-type>`) against the shared `--dedupe-cache-max-entries` LRU cap. Reuse still works in both directions; the effective capacity just halves for files deployed both ways. Raise the cap, or delete `.ario-deploy/` once, if you switch back and forth.
+- **Cache entries are keyed differently in each mode**, so a project that toggles `--incremental` on and off stores up to two entries per file against the shared `--dedupe-cache-max-entries` cap: `<sha256>` (or `gzip:<sha256>` when compressed) without it, and `<sha256>|<mime-type>` (or `<sha256>|<mime-type>|gzip`) with it.
 
 **Notes:**
 
 - Off by default. Nothing changes for an existing pipeline until you pass the flag.
 - Refused alongside `--no-dedupe` or `--dedupe-cache-max-entries 0`, which ask for the opposite.
-- Two files with identical bytes _and_ identical content type in the same folder are paid for once and both listed in the manifest.
+- Works with `--compress`: each file's `File-SHA256` is the hash of the file on disk, and a compressed upload also carries `Content-Encoding`, so a lookup only ever reuses an upload made with the same encoding. Turning compression on or off uploads each file once more, then reuse resumes.
 - The lookup uses `https://arweave.net/graphql` by default; override it with `--incremental-gateway`.
+
+## Compression
+
+Arweave storage is priced per byte, and HTML, JavaScript, CSS and JSON typically shrink 5-8x when compressed (a 169 MB static docs site uploads as 22 MiB). `--compress` compresses each file before upload and tags it with `Content-Encoding`; gateways return that header, and browsers decompress transparently.
+
+```bash
+ario-deploy deploy --wallet ./wallet.json --deploy-folder ./out --compress gzip
+```
+
+In the GitHub Action:
+
+```yaml
+- uses: ar-io/ar-io-deploy@v1
+  with:
+    deploy-key: ${{ secrets.DEPLOY_KEY }}
+    deploy-folder: ./dist
+    compress: gzip
+    compress-exclude: 'llms*.txt,*.md'
+```
+
+- **Prefer `gzip`.** Gateways send the encoded bytes to every client, whether or not it asked for compression. Every browser and HTTP library understands gzip; `br` is ~15% smaller but some non-browser clients cannot decode it.
+- **Formats that are already compressed** (images, fonts, video, archives) are uploaded as-is. Every other file is compressed, even a tiny one gzip makes a few bytes larger, so its tags always match how it was planned.
+- **Exclude files meant for non-browser clients** with `--compress-exclude`, e.g. text files that tools fetch with `curl`: `--compress-exclude "llms*.txt,*.md"`. A pattern without `/` matches the file name in any directory.
+- **Gateways must label items they have not indexed yet.** Right after a deploy, a gateway may serve a data item before it has indexed the item's tags. An ar-io-node without the fix for that (ar-io-node #964/#966) sends the gzip bytes with no `Content-Encoding` header, and browsers render garbage until the item is indexed -- or indefinitely, on a gateway that never indexes the bundle. The ar.io and Turbo gateways (`turbo-gateway.com`, `ardrive.net`, and those serving `*.ar.io`) have the fix; other operators get it by upgrading. Deploy to a test undername first and load it through each gateway that matters, including through Wayfinder, which may pick any gateway.
+- **Deduplication still works**, including `--incremental`. Compressed uploads are cached (and found on chain) under their own key, so turning compression on re-uploads each file once, and later deploys skip unchanged files as usual.
 
 ## Package.json Scripts
 

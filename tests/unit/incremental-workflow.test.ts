@@ -378,8 +378,10 @@ describe('the credits pre-flight prices what will actually be sent', () => {
     await runUploadWorkflow(DEPLOY_KEY, config(), io)
 
     expect(quoted).toHaveLength(1)
-    // Two 60,000-byte chunks, not the ~360 KB folder.
-    expect(Number(quoted[0])).toBe(120_000)
+    // Two 60,000-byte chunks plus the manifest (always uploaded, estimated at a
+    // few hundred bytes for this folder), not the ~360 KB folder.
+    expect(Number(quoted[0])).toBeGreaterThan(120_000)
+    expect(Number(quoted[0])).toBeLessThan(121_000)
   })
 })
 

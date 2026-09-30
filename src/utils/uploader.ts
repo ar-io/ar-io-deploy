@@ -16,9 +16,16 @@ import {
   type TransactionCache,
 } from './cache.js'
 import {
+  compress,
+  type CompressionConfig,
+  type ContentEncoding,
+  shouldCompress,
+} from './compression.js'
+import {
   assertDeployInvariantTags,
   type ChainIndex,
   type DataItemTag,
+  type FileIdentity,
   incrementalCacheKey,
   isArweaveId,
 } from './incremental.js'
@@ -47,19 +54,31 @@ export function provenanceTags(): DataItemTag[] {
  * the bill notices. Provenance still rides on the manifest, which is rewritten
  * every deploy regardless.
  *
+ * `Content-Encoding` is allowed: it is decided by the deploy's configuration,
+ * not by the deploy, so identical bytes uploaded with the same settings still
+ * get identical tags. It is also what lets the chain index tell a compressed
+ * upload from an uncompressed one of the same file.
+ *
  * `assertDeployInvariantTags` guards the set on every call, so a future tag
  * added here fails loudly instead of doubling users' costs.
  *
- * @param contentHash - SHA-256 of the file, published so a later run can find
- *   this upload again with no local state.
+ * @param contentHash - SHA-256 of the file as it is on disk (before any
+ *   compression), published so a later run can find this upload again with no
+ *   local state.
  * @param mimeType - Content type served for the file.
+ * @param encoding - Content-Encoding the uploaded bytes carry, if compressed.
  * @returns The deploy-invariant tag set for the file.
  */
-export function incrementalFileTags(contentHash: string, mimeType: string): DataItemTag[] {
+export function incrementalFileTags(
+  contentHash: string,
+  mimeType: string,
+  encoding?: ContentEncoding,
+): DataItemTag[] {
   const tags: DataItemTag[] = [
     { name: 'App-Name', value: APP_NAME },
     { name: 'Content-Type', value: mimeType },
     { name: FILE_HASH_TAG, value: contentHash },
+    ...(encoding ? [{ name: 'Content-Encoding', value: encoding }] : []),
   ]
 
   assertDeployInvariantTags(tags)
@@ -95,10 +114,35 @@ export interface UploadResult {
 export interface FolderUploadResult extends UploadResult {
   /** Number of files that were cache hits (not re-uploaded) */
   cacheHits: number
+  /** Number of files identical to another file in this run (sharing its upload) */
+  duplicates: number
   /** Total number of files in the folder */
   totalFiles: number
   /** Number of files that were uploaded */
   uploaded: number
+  /** Bytes sent for those files (after compression), excluding the manifest */
+  uploadedBytes: number
+}
+
+/**
+ * The bytes to upload for one file, and the encoding they carry.
+ *
+ * Eligible files are always compressed, even the rare tiny one gzip makes a
+ * few bytes larger. The encoding is part of the file's cache key and, in
+ * incremental mode, of the tags the chain index matches on; uploading some
+ * "compressed" files uncompressed would make them unfindable on a fresh
+ * machine and re-upload them on every deploy.
+ */
+async function encodeForUpload(
+  filePath: string,
+  encoding: ContentEncoding | undefined,
+): Promise<{ body?: Buffer; size: number }> {
+  if (!encoding) {
+    return { size: fs.statSync(filePath).size }
+  }
+
+  const body = await compress(fs.readFileSync(filePath), encoding)
+  return { body, size: body.length }
 }
 
 export async function uploadFile(
@@ -106,13 +150,19 @@ export async function uploadFile(
   filePath: string,
   options?: {
     cache?: TransactionCache
+    compression?: CompressionConfig
     fundingMode?: OnDemandFunding
   },
 ): Promise<UploadResult> {
   const mimeType = mime.lookup(filePath) || 'application/octet-stream'
+  const encoding =
+    options?.compression && shouldCompress(path.basename(filePath), options.compression)
+      ? options.compression.encoding
+      : undefined
 
-  // Compute hash if cache is provided
-  const fileHash = options?.cache ? await hashFile(filePath) : undefined
+  // Compute hash if cache is provided; compressed uploads get their own key
+  const rawHash = options?.cache ? await hashFile(filePath) : undefined
+  const fileHash = rawHash && encoding ? `${encoding}:${rawHash}` : rawHash
 
   // Check cache for hit
   if (fileHash && options?.cache) {
@@ -127,6 +177,8 @@ export async function uploadFile(
     }
   }
 
+  const { body } = await encodeForUpload(filePath, encoding)
+
   // Upload file
   const uploadResult = await turbo.uploadFile({
     dataItemOpts: {
@@ -140,9 +192,12 @@ export async function uploadFile(
           name: 'Content-Type',
           value: mimeType,
         },
+        ...(encoding ? [{ name: 'Content-Encoding', value: encoding }] : []),
       ],
     },
-    file: filePath,
+    ...(body
+      ? { fileSizeFactory: () => body.length, fileStreamFactory: () => Readable.from(body) }
+      : { file: filePath }),
     ...(options?.fundingMode && { fundingMode: options.fundingMode }),
   })
 
@@ -173,113 +228,135 @@ export async function uploadFile(
 /** Default concurrency for parallel file uploads */
 const DEFAULT_UPLOAD_CONCURRENCY = 10
 
-export interface FileUploadTask {
+/** Length of an Arweave transaction ID, used to estimate the manifest size. */
+const TRANSACTION_ID_LENGTH = 43
+
+export interface PlannedFile {
+  /** Compressed bytes to upload, when compression applies. */
+  body?: Buffer
   /**
-   * File size, so a plan can be priced before anything is signed. Zero outside
-   * incremental mode, where nothing reads it and a `statSync` per file would
-   * be a blocking syscall bought for nothing.
-   */
-  bytes: number
-  cached?: { transactionId: string }
-  /**
-   * Key this file is remembered under: the bare hash outside incremental mode
-   * (unchanged historic behaviour), hash + content type inside it, so that
-   * byte-identical files served under different types cannot collapse onto a
-   * single upload and be served under the wrong one.
+   * Key this file is remembered under, empty when nothing is being cached.
+   *
+   * Outside incremental mode: the SHA-256, prefixed with the encoding when
+   * compressed (`gzip:<hash>`) -- the historic format, so existing caches stay
+   * valid. Inside it: hash + content type (+ encoding), so byte-identical files
+   * served under different types, or with different encodings, can never
+   * collapse onto one upload.
    */
   cacheKey: string
+  cached?: { transactionId: string }
   contentType: string
+  /**
+   * Relative path of an identical file earlier in this run. The file is not
+   * uploaded; it shares that file's transaction.
+   */
+  duplicateOf?: string
+  encoding?: ContentEncoding
   fullPath: string
+  /** SHA-256 of the file on disk, empty when nothing needed it. */
   hash: string
   relativePath: string
+  /** Bytes this file adds to the upload: 0 when cached or a duplicate. */
+  uploadBytes: number
 }
 
 /**
  * Everything decided about a folder upload before any of it is paid for.
  *
- * Single use. `uploadFolder` marks tasks as resolved on the shared objects it
- * holds but does not recompute `uploadTargets`, so handing the same plan to a
- * second `uploadFolder` call re-uploads everything. Make a new one per call.
+ * Single use: `uploadFolder` uploads whatever the plan says is missing, so
+ * handing the same plan to a second call uploads those files again.
  */
 export interface FolderUploadPlan {
-  cache: TransactionCache
-  cacheHits: number
   /**
-   * Bytes that will actually be uploaded.
-   *
-   * The whole point of the feature: a caller can price this instead of the
-   * folder, so a redeploy of two changed chunks is not refused for want of
-   * credits for the entire bundle.
+   * The cache, touched for every hit and enriched with anything the chain
+   * index recovered. Undefined when neither a cache nor incremental mode is in
+   * play.
    */
-  pendingBytes: number
-  relativePaths: string[]
-  tasks: FileUploadTask[]
-  uncachedTasks: FileUploadTask[]
-  uploadTargets: FileUploadTask[]
+  cache?: TransactionCache
+  /** Files already on Arweave: local cache hits plus chain-index recoveries. */
+  cacheHits: number
+  duplicates: number
+  files: PlannedFile[]
+  /** Estimated size of the manifest, which is always uploaded. */
+  manifestBytes: number
+  /** Of `cacheHits`, how many the chain index recovered. */
+  recovered: number
+  /**
+   * Total bytes that uploading this plan will send, excluding the manifest.
+   * This is what the credit check prices, so a redeploy of two changed chunks
+   * is not refused for want of credits for the whole folder.
+   */
+  uploadBytes: number
 }
 
 /**
- * Work out what a folder upload would do, without doing any of it.
+ * Work out what uploading a folder will actually send, without uploading.
  *
- * Hashes the folder, resolves what is already on Arweave, and reports what is
- * left. Split out of `uploadFolder` so the cost of a deploy can be quoted from
- * the files that will really be sent; `uploadFolder` calls it itself when no
- * plan is handed in, so the behaviour is identical either way.
+ * - Files whose content is in the dedupe cache reuse their transaction.
+ * - In incremental mode, files the local cache does not know are looked up
+ *   among this wallet's own past uploads on chain.
+ * - Files identical to another file in this run (same bytes and content type)
+ *   share one upload, so e.g. a static export that writes the same payload
+ *   under two names pays once.
+ * - With `compression`, eligible files are compressed; the cache key includes
+ *   the encoding so compressed and uncompressed uploads never mix.
  *
  * @param folderPath - Folder to upload.
- * @param options - Cache, fallback validation and incremental options.
+ * @param options - Cache, compression, fallback validation and incremental options.
  * @returns The plan, including the cache enriched with anything recovered.
  */
 export async function planFolderUpload(
   folderPath: string,
   options?: {
     cache?: TransactionCache
+    compression?: CompressionConfig
+    concurrency?: number
     fallbackFile?: string
     incremental?: IncrementalOptions
   },
 ): Promise<FolderUploadPlan> {
-  const useCache = options?.cache !== undefined
   const incremental = options?.incremental
+  const compression = options?.compression
+  // Incremental mode always keeps a cache: it is where recovered ids go.
+  const useCache = options?.cache !== undefined || incremental !== undefined
 
-  // Get all files in the folder
   const relativePaths = getAllFiles(folderPath)
-
   assertUploadableFolder(relativePaths, options?.fallbackFile)
 
   /*
-   * Hash every file when the local cache is in play, and always in incremental
-   * mode — there the hash is not just a cache key, it is published as a tag so
-   * a later run with no local state can find this upload again.
+   * Hash every file when a cache is in play. In incremental mode the hash is
+   * not just a cache key, it is published as a tag so a later run with no
+   * local state can find this upload again.
    */
-  const needHashes = useCache || incremental !== undefined
-  const tasks: FileUploadTask[] = await Promise.all(
+  const files: PlannedFile[] = await Promise.all(
     relativePaths.map(async (relativePath) => {
       const fullPath = path.join(folderPath, relativePath)
-      const hash = needHashes ? await hashFile(fullPath) : ''
       const contentType = mime.lookup(fullPath) || 'application/octet-stream'
-      const cacheKey = hash && incremental ? incrementalCacheKey(hash, contentType) : hash
-      return {
-        // Only a plan is priced, and only an incremental one is.
-        bytes: incremental ? fs.statSync(fullPath).size : 0,
-        cacheKey,
-        contentType,
-        fullPath,
-        hash,
-        relativePath,
-      }
+      const encoding =
+        compression && shouldCompress(relativePath, compression) ? compression.encoding : undefined
+      const hash = useCache ? await hashFile(fullPath) : ''
+      const cacheKey = hash
+        ? incremental
+          ? incrementalCacheKey(hash, contentType, encoding)
+          : encoding
+            ? `${encoding}:${hash}`
+            : hash
+        : ''
+      return { cacheKey, contentType, encoding, fullPath, hash, relativePath, uploadBytes: 0 }
     }),
   )
 
-  // Check cache for each file
-  let cache = options?.cache ?? {}
+  let cache = useCache ? (options?.cache ?? {}) : undefined
   let cacheHits = 0
+  let recovered = 0
 
-  for (const task of tasks) {
-    if (useCache && task.cacheKey) {
-      const cached = getCachedTransaction(cache, task.cacheKey)
+  if (cache) {
+    for (const file of files) {
+      if (!file.cacheKey) continue
+      const cached = getCachedTransaction(cache, file.cacheKey)
       if (cached) {
-        task.cached = { transactionId: cached.transactionId }
-        cache = touchCacheEntry(cache, task.cacheKey)
+        file.cached = { transactionId: cached.transactionId }
+        cache = touchCacheEntry(cache, file.cacheKey)
         cacheHits++
       }
     }
@@ -291,25 +368,29 @@ export async function planFolderUpload(
    * all and every redeploy would otherwise pay for the whole bundle again.
    *
    * A gateway that is unreachable, slow or lagging behind costs reuse, never
-   * correctness: unresolved hashes simply get uploaded.
+   * correctness: unresolved files simply get uploaded.
    */
-  if (incremental?.index) {
-    const unknown = new Map(
-      tasks
-        .filter((t) => !t.cached && t.hash)
-        .map((t) => [t.cacheKey, { contentType: t.contentType, hash: t.hash }]),
-    )
+  if (incremental?.index && cache) {
+    const unknown = new Map<string, FileIdentity>()
+    for (const file of files) {
+      if (!file.cached && file.hash) {
+        unknown.set(file.cacheKey, {
+          contentType: file.contentType,
+          encoding: file.encoding,
+          hash: file.hash,
+        })
+      }
+    }
 
     if (unknown.size > 0) {
       try {
         const found = await incremental.index.resolve(unknown.values())
-        let recovered = 0
 
-        for (const task of tasks) {
-          const id = task.cached ? undefined : found[task.cacheKey]
+        for (const file of files) {
+          const id = file.cached ? undefined : found[file.cacheKey]
           if (isArweaveId(id)) {
-            task.cached = { transactionId: id }
-            cache = setCachedTransaction(cache, task.cacheKey, id)
+            file.cached = { transactionId: id }
+            cache = setCachedTransaction(cache, file.cacheKey, id)
             cacheHits++
             recovered++
           }
@@ -325,36 +406,86 @@ export async function planFolderUpload(
     }
   }
 
-  // If all files are cached, we still need to build and upload a new manifest
-  // (because the manifest itself has a unique transaction ID each time)
-  const uncachedTasks = tasks.filter((t) => !t.cached)
-
   /*
-   * Two files with identical bytes share a single upload in incremental mode:
-   * the hash, not the path, is what is being paid for. Outside it the historic
-   * one-upload-per-file behaviour is left exactly as it was.
+   * Files identical to one earlier in this run share its upload. The share key
+   * includes the content type, so identical bytes named data.json and data.txt
+   * stay separate and each keeps its own Content-Type tag.
    */
-  const uploadTargets = incremental ? dedupeTasksByCacheKey(uncachedTasks) : uncachedTasks
+  let duplicates = 0
+  const firstUpload = new Map<string, PlannedFile>()
+  for (const file of files) {
+    if (file.cached || !file.cacheKey) continue
+
+    const shareKey = `${file.contentType}|${file.cacheKey}`
+    const first = firstUpload.get(shareKey)
+    if (first) {
+      file.duplicateOf = first.relativePath
+      duplicates++
+    } else {
+      firstUpload.set(shareKey, file)
+    }
+  }
+
+  // Size (and compress) only the files that will actually be uploaded.
+  const toUpload = files.filter((file) => !file.cached && !file.duplicateOf)
+  const limit = pLimit(options?.concurrency ?? DEFAULT_UPLOAD_CONCURRENCY)
+
+  await Promise.all(
+    toUpload.map((file) =>
+      limit(async () => {
+        const { body, size } = await encodeForUpload(file.fullPath, file.encoding)
+        file.body = body
+        file.uploadBytes = size
+      }),
+    ),
+  )
 
   return {
     cache,
     cacheHits,
-    pendingBytes: uploadTargets.reduce((total, task) => total + task.bytes, 0),
-    relativePaths,
-    tasks,
-    uncachedTasks,
-    uploadTargets,
+    duplicates,
+    files,
+    manifestBytes: estimateManifestBytes(relativePaths),
+    recovered,
+    uploadBytes: toUpload.reduce((sum, file) => sum + file.uploadBytes, 0),
   }
+}
+
+/** Manifest paths for a file: the file, plus `dir` for every `dir/index.html`. */
+function manifestPathKeys(relativePath: string): string[] {
+  return relativePath.endsWith('/index.html')
+    ? [relativePath, relativePath.replace(/\/index\.html$/, '')]
+    : [relativePath]
+}
+
+function estimateManifestBytes(relativePaths: string[]): number {
+  const placeholder = { id: 'x'.repeat(TRANSACTION_ID_LENGTH) }
+  const paths = Object.fromEntries(
+    relativePaths
+      .flatMap((relativePath) => manifestPathKeys(relativePath))
+      .map((key) => [key, placeholder]),
+  )
+  const manifest = {
+    fallback: placeholder,
+    index: { path: 'index.html' },
+    manifest: 'arweave/paths',
+    paths,
+    version: '0.2.0',
+  }
+  return Buffer.byteLength(JSON.stringify(manifest))
 }
 
 /**
  * Upload a folder with per-file deduplication.
- * Each file is checked against the cache individually, and only uncached files are uploaded.
- * A manifest is then constructed and uploaded to create the folder structure.
+ * Each file is checked against the cache (and, in incremental mode, the chain
+ * index), identical files in the same run are uploaded once, and only what is
+ * left is uploaded (compressed, when `compression` is set). A manifest is then
+ * constructed and uploaded to create the folder structure.
  *
  * @param turbo - Upload client used for file and manifest uploads.
  * @param folderPath - Folder to upload.
- * @param options - Upload options for caching, concurrency, funding, and failure handling.
+ * @param options - Upload options for caching, compression, incremental reuse,
+ *   concurrency, funding, and failure handling.
  * @returns Folder upload result including manifest transaction ID and cache stats.
  */
 export async function uploadFolder(
@@ -362,6 +493,7 @@ export async function uploadFolder(
   folderPath: string,
   options?: {
     cache?: TransactionCache
+    compression?: CompressionConfig
     concurrency?: number
     /**
      * Path, relative to the folder, whose transaction becomes the manifest's
@@ -379,27 +511,27 @@ export async function uploadFolder(
     incremental?: IncrementalOptions
     /**
      * A plan from `planFolderUpload`, when the caller has already made one to
-     * quote the cost. Single use, and its cache supersedes `cache` since it
-     * carries whatever the chain lookup recovered — passing one is enough to
-     * put the cache in play. Omitted, a plan is made here.
+     * quote the cost. Single use; its cache supersedes `cache`, since it
+     * carries whatever the chain lookup recovered. Omitted, a plan is made here.
      */
     plan?: FolderUploadPlan
     throwOnFailure?: boolean
   },
 ): Promise<FolderUploadResult> {
   const concurrency = options?.concurrency ?? DEFAULT_UPLOAD_CONCURRENCY
-  /*
-   * A plan always carries a cache, so passing one counts. Reading only
-   * `options.cache` here silently dropped every non-incremental cache update
-   * and returned `updatedCache: undefined` to a caller who had done nothing
-   * wrong.
-   */
-  const useCache = options?.cache !== undefined || options?.plan !== undefined
   const incremental = options?.incremental
 
-  const plan = options?.plan ?? (await planFolderUpload(folderPath, options))
-  const { relativePaths, tasks, uncachedTasks, uploadTargets } = plan
-  let { cache, cacheHits } = plan
+  const plan =
+    options?.plan ??
+    (await planFolderUpload(folderPath, {
+      cache: options?.cache,
+      compression: options?.compression,
+      concurrency,
+      fallbackFile: options?.fallbackFile,
+      incremental,
+    }))
+  const { cacheHits, duplicates, files } = plan
+  const relativePaths = files.map((file) => file.relativePath)
 
   /*
    * Re-checked even when the plan came from outside. These are the cheap
@@ -408,36 +540,50 @@ export async function uploadFolder(
    */
   assertUploadableFolder(relativePaths, options?.fallbackFile)
 
-  // Upload uncached files with concurrency control using p-limit
+  const useCache = plan.cache !== undefined
+  let cache = plan.cache ?? {}
+
+  // If all files are cached, we still need to build and upload a new manifest
+  // (because the manifest itself has a unique transaction ID each time)
+  const toUpload = files.filter((file) => !file.cached && !file.duplicateOf)
+
+  // Upload with concurrency control using p-limit
   const limit = pLimit(concurrency)
 
   /*
    * allSettled, not all: `Promise.all` rejects on the first failure while the
-   * other workers are still in flight, so their `onCacheUpdate` calls land
-   * after the caller has already flushed and given up — ids paid for and
-   * thrown away. Everything settles first, then the failure propagates.
+   * other workers are still in flight, so their `onCacheUpdate` calls would
+   * land after the caller has already flushed and given up -- ids paid for and
+   * thrown away. Everything settles first, then the failure propagates. The
+   * same uploads are attempted either way, so the bill is unchanged; a
+   * systemic failure is just reported once the queue drains.
    */
   const settled = await Promise.allSettled(
-    uploadTargets.map((task) =>
+    toUpload.map((file) =>
       limit(async () => {
-        const mimeType = task.contentType
+        const tags = incremental
+          ? incrementalFileTags(file.hash, file.contentType, file.encoding)
+          : [
+              ...provenanceTags(),
+              { name: 'Content-Type', value: file.contentType },
+              ...(file.encoding ? [{ name: 'Content-Encoding', value: file.encoding }] : []),
+            ]
+        const { body } = file
 
         const uploadResult = await turbo.uploadFile({
-          dataItemOpts: {
-            tags: incremental
-              ? incrementalFileTags(task.hash, mimeType)
-              : [...provenanceTags(), { name: 'Content-Type', value: mimeType }],
-          },
-          file: task.fullPath,
+          dataItemOpts: { tags },
+          ...(body
+            ? { fileSizeFactory: () => body.length, fileStreamFactory: () => Readable.from(body) }
+            : { file: file.fullPath }),
           ...(options?.fundingMode && { fundingMode: options.fundingMode }),
         })
 
         if (!uploadResult?.id) {
           if (options?.throwOnFailure) {
-            throw new Error(`Failed to upload file: ${task.relativePath}`)
+            throw new Error(`Failed to upload file: ${file.relativePath}`)
           }
 
-          return { hash: task.cacheKey, task, transactionId: null }
+          return { file, transactionId: null }
         }
 
         /*
@@ -447,59 +593,33 @@ export async function uploadFolder(
          * read are not separated by an await, so the concurrent workers cannot
          * lose each other's writes.
          */
-        if (incremental && task.cacheKey) {
-          cache = setCachedTransaction(cache, task.cacheKey, uploadResult.id)
+        if (incremental && file.cacheKey) {
+          cache = setCachedTransaction(cache, file.cacheKey, uploadResult.id)
           incremental.onCacheUpdate?.(cache)
         }
 
-        return { hash: task.cacheKey, task, transactionId: uploadResult.id }
+        return { file, transactionId: uploadResult.id }
       }),
     ),
   )
 
-  const uploadResults = settled.flatMap((outcome) =>
-    outcome.status === 'fulfilled' ? [outcome.value] : [],
-  )
-
-  /*
-   * Unconditionally, not gated on throwOnFailure: Promise.all always
-   * propagated a thrown error, and that flag only ever governed an upload that
-   * came back without an id.
-   *
-   * Two things do change, deliberately. Which error surfaces: Promise.all
-   * reported whichever failed first in time, this reports the lowest-index
-   * one. And how long a doomed deploy takes to say so: the whole p-limit queue
-   * drains first, so a systemic failure on a large folder is reported at the
-   * end rather than within milliseconds. p-limit was never cancelled, so the
-   * same uploads were always attempted and the bill is unchanged — the trade
-   * is a slower error message in exchange for not stranding ids that nobody
-   * will flush.
-   */
   const rejection = settled.find((outcome) => outcome.status === 'rejected')
   if (rejection?.status === 'rejected') {
     throw rejection.reason
   }
 
+  const uploadResults = settled.flatMap((outcome) =>
+    outcome.status === 'fulfilled' ? [outcome.value] : [],
+  )
+
   // Update cache with all successful uploads (done sequentially to avoid race conditions)
-  if (!incremental) {
-    for (const result of uploadResults) {
-      if (useCache && result.hash && result.transactionId) {
-        cache = setCachedTransaction(cache, result.hash, result.transactionId)
-      }
-    }
-  }
+  const uploadedIds = new Map<string, string>()
+  for (const result of uploadResults) {
+    if (!result.transactionId) continue
 
-  // Point the files that shared an upload at the id it produced
-  if (incremental) {
-    for (const task of uncachedTasks) {
-      if (task.cached || !task.cacheKey) {
-        continue
-      }
-
-      const id = getCachedTransaction(cache, task.cacheKey)?.transactionId
-      if (isArweaveId(id)) {
-        task.cached = { transactionId: id }
-      }
+    uploadedIds.set(result.file.relativePath, result.transactionId)
+    if (!incremental && useCache && result.file.cacheKey) {
+      cache = setCachedTransaction(cache, result.file.cacheKey, result.transactionId)
     }
   }
 
@@ -507,36 +627,28 @@ export async function uploadFolder(
   const failedUploads = uploadResults.filter((r) => r.transactionId === null)
   if (failedUploads.length > 0 && options?.throwOnFailure) {
     throw new Error(
-      `Failed to upload ${failedUploads.length} file(s): ${failedUploads.map((f) => f.task.relativePath).join(', ')}`,
+      `Failed to upload ${failedUploads.length} file(s): ${failedUploads.map((f) => f.file.relativePath).join(', ')}`,
     )
   }
 
-  // Build manifest paths from cached and newly uploaded files
+  // Build manifest paths from cached, shared and newly uploaded files
   const manifestPaths: Record<string, { id: string }> = {}
 
-  for (const task of tasks) {
-    let transactionId: string | null = null
-
-    if (task.cached) {
-      transactionId = task.cached.transactionId
-    } else {
-      const uploadResult = uploadResults.find((r) => r.task === task)
-      transactionId = uploadResult?.transactionId ?? null
-    }
+  for (const file of files) {
+    const transactionId =
+      file.cached?.transactionId ?? uploadedIds.get(file.duplicateOf ?? file.relativePath)
 
     if (transactionId) {
-      manifestPaths[task.relativePath] = { id: transactionId }
-
-      // Add directory index support: if file is dir/index.html, also add dir → same ID
-      if (task.relativePath.endsWith('/index.html')) {
-        const dirPath = task.relativePath.replace(/\/index\.html$/, '')
-        manifestPaths[dirPath] = { id: transactionId }
+      // Directory index support: dir/index.html is also served at dir
+      for (const key of manifestPathKeys(file.relativePath)) {
+        manifestPaths[key] = { id: transactionId }
       }
     }
   }
 
   // Determine the index path (root index.html)
-  const indexPath = relativePaths.includes('index.html') ? 'index.html' : undefined
+  const pathSet = new Set(relativePaths)
+  const indexPath = pathSet.has('index.html') ? 'index.html' : undefined
 
   /*
    * Determine the fallback — the transaction a gateway serves for any path the
@@ -551,8 +663,7 @@ export async function uploadFolder(
    * Note the shape: `fallback` takes an `{ id }`, not the `{ path }` that
    * `index` takes. The v0.2.0 spec differs between the two.
    */
-  const fallbackPath =
-    options?.fallbackFile ?? (relativePaths.includes('404.html') ? '404.html' : undefined)
+  const fallbackPath = options?.fallbackFile ?? (pathSet.has('404.html') ? '404.html' : undefined)
 
   const fallbackId = fallbackPath ? manifestPaths[fallbackPath]?.id : undefined
 
@@ -585,12 +696,14 @@ export async function uploadFolder(
   }
 
   return {
-    cacheHit: cacheHits === tasks.length,
+    cacheHit: cacheHits === files.length,
     cacheHits,
-    totalFiles: tasks.length,
+    duplicates,
+    totalFiles: files.length,
     transactionId: manifestUploadResult.id,
-    updatedCache: useCache || incremental ? cache : undefined,
-    uploaded: uploadTargets.length - failedUploads.length,
+    updatedCache: useCache ? cache : undefined,
+    uploaded: toUpload.length - failedUploads.length,
+    uploadedBytes: plan.uploadBytes,
   }
 }
 
@@ -612,27 +725,4 @@ function assertUploadableFolder(relativePaths: string[], fallbackFile?: string):
         `It must be a path relative to the deploy folder, e.g. "404.html".`,
     )
   }
-}
-
-/**
- * One task per distinct cache key, keeping the first occurrence.
- *
- * The key includes the content type, so two files with identical bytes but
- * different types are still two uploads. Collapsing them would serve one of
- * them under the MIME type of the other.
- *
- * @param tasks - Tasks that still need uploading.
- * @returns The subset that must actually be paid for.
- */
-function dedupeTasksByCacheKey(tasks: FileUploadTask[]): FileUploadTask[] {
-  const seen = new Set<string>()
-
-  return tasks.filter((task) => {
-    if (!task.cacheKey || seen.has(task.cacheKey)) {
-      return !task.cacheKey
-    }
-
-    seen.add(task.cacheKey)
-    return true
-  })
 }

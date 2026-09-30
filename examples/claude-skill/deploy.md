@@ -145,7 +145,16 @@ npx @ar.io/deploy deploy
 - `--arns-wallet ./id.json` — Solana wallet for ArNS authority
 - `--undername staging` — deploy to a subdomain (e.g., `staging_myapp.ar.io`)
 - `--on-demand ario` — auto-fund upload if balance is low
-- `--no-dedupe` — force re-upload all files
+- `--no-dedupe` — force re-upload all files (identical files within one deploy are still uploaded once)
+- `--compress gzip` — compress HTML/JS/CSS/JSON before upload (~5-8x cheaper); pair with `--compress-exclude "llms*.txt,*.md"` for files plain HTTP clients fetch
+
+Unchanged files are never re-uploaded, and the credit check prices only what will actually be uploaded.
+
+**With `--compress`, verify a page right after deploying.** Gateways must send
+`Content-Encoding` even for items they have not indexed yet (ar-io-node
+#964/#966; the ar.io and Turbo gateways have it). A gateway without the fix
+serves the gzip bytes with no header, and the page renders as garbage. If that
+happens, use a gateway with the fix or redeploy without `--compress`.
 
 ## After Deployment
 

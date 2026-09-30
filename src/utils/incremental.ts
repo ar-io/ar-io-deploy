@@ -44,6 +44,9 @@ export type DataItemTag = { name: string; value: string }
 /** A file's identity for reuse purposes: its bytes *and* how it is served. */
 export interface FileIdentity {
   contentType: string
+  /** Content-Encoding the upload carries, when it was compressed. */
+  encoding?: string
+  /** SHA-256 of the file as it is on disk, before any compression. */
   hash: string
 }
 
@@ -127,12 +130,18 @@ export function assertOwnerAddress(owner: string): void {
  * network first would then be served for both. Including the type keeps them
  * distinct in the local cache, in the in-run dedupe, and on chain.
  *
- * @param hash - SHA-256 of the file contents.
+ * The encoding is part of the key for the same reason: a gzip upload and an
+ * uncompressed one of the same file are different data items, and handing a
+ * deploy that asked for one the other would serve bytes the gateway labels
+ * differently from what the deploy intended.
+ *
+ * @param hash - SHA-256 of the file contents, before any compression.
  * @param contentType - MIME type the file is served as.
+ * @param encoding - Content-Encoding of the upload, if compressed.
  * @returns A key safe to use in the transaction cache and the chain index.
  */
-export function incrementalCacheKey(hash: string, contentType: string): string {
-  return `${hash}|${contentType}`
+export function incrementalCacheKey(hash: string, contentType: string, encoding?: string): string {
+  return encoding ? `${hash}|${contentType}|${encoding}` : `${hash}|${contentType}`
 }
 
 /**
@@ -220,8 +229,8 @@ interface GraphQlResponse {
  * is believed. The `owners` argument is applied server-side by whichever host
  * `--incremental-gateway` names, and a wrong id here does not merely break one
  * deploy — it is written into the local cache and poisons every later one. So
- * an edge must carry the expected owner and the expected `Content-Type` or it
- * is discarded. A `File-SHA256` tag is a claim, not a proof; anyone can stamp
+ * an edge must carry the expected owner, `Content-Type` and `Content-Encoding`
+ * or it is discarded. A `File-SHA256` tag is a claim, not a proof; anyone can stamp
  * your hash on their own bytes.
  *
  * Gateway GraphQL indexing lags an upload by minutes, so two machines
@@ -275,7 +284,7 @@ export function createChainIndex(options: ChainIndexOptions): ChainIndex {
       const wanted = new Map<string, FileIdentity>()
       for (const file of files) {
         if (isContentHash(file.hash)) {
-          wanted.set(incrementalCacheKey(file.hash, file.contentType), file)
+          wanted.set(incrementalCacheKey(file.hash, file.contentType, file.encoding), file)
         }
       }
 
@@ -318,6 +327,8 @@ export function createChainIndex(options: ChainIndexOptions): ChainIndex {
           const tags = edge.node?.tags ?? []
           const hash = tags.find((tag) => tag.name === FILE_HASH_TAG)?.value
           const contentType = tags.find((tag) => tag.name === 'Content-Type')?.value
+          // Absent on uncompressed uploads, which is exactly what the key needs.
+          const encoding = tags.find((tag) => tag.name === 'Content-Encoding')?.value
 
           if (!isArweaveId(id) || !isContentHash(hash) || contentType === undefined) {
             continue
@@ -333,7 +344,7 @@ export function createChainIndex(options: ChainIndexOptions): ChainIndex {
             continue
           }
 
-          const key = incrementalCacheKey(hash, contentType)
+          const key = incrementalCacheKey(hash, contentType, encoding)
           /*
            * Newest first, and any upload of these exact bytes under this exact
            * type is equally valid, so the first sighting wins and there is

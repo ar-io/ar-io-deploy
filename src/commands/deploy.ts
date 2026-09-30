@@ -167,6 +167,8 @@ export default class Deploy extends Command {
         'arns-private-key': arnsKeyConfig.privateKey,
         'arns-wallet': arnsKeyConfig.wallet,
         cluster: advancedOptions?.cluster || baseConfig.cluster,
+        compress: baseConfig.compress,
+        'compress-exclude': baseConfig['compress-exclude'],
         'dedupe-cache-max-entries': effectiveCacheMaxEntries,
         'deploy-file': baseConfig['deploy-file'],
         'deploy-folder': baseConfig['deploy-folder'],

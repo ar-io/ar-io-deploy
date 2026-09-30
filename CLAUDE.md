@@ -39,11 +39,15 @@ All CLI flags are defined in `src/constants/flags.ts` as a single source of trut
 
 ### Upload Flow
 
-`src/workflows/upload-workflow.ts` orchestrates: create signer -> init Turbo client -> handle on-demand funding (with 10% buffer) -> upload file/folder with dedup cache -> return tx ID.
+`src/workflows/upload-workflow.ts` orchestrates: create signer -> init Turbo client -> handle on-demand funding (with 10% buffer) -> plan the folder upload (`planFolderUpload`: hash, cache lookup, in-run dedupe, compression) -> credit check priced on the plan -> upload -> return tx ID. The plan is computed once and reused by `uploadFolder`, so the credit check prices exactly what will be sent, not the whole folder.
+
+### Compression
+
+`--compress gzip|br` (`src/utils/compression.ts`) compresses each file before upload and adds a `Content-Encoding` tag; already-compressed formats, `--compress-exclude` globs, and files that would grow are uploaded as-is. It only works if gateways send that header for items they have not indexed yet (ar-io-node #964/#966); without it, pages render as garbage right after a deploy.
 
 ### Deduplication Cache
 
-Located at `.ario-deploy/transaction-cache.json` (relative to cwd). Maps SHA-256 file hashes to `{transactionId, createdAtTimestamp, lastUsedTimestamp}`. LRU eviction at configurable max entries (default 10,000). Disable with `--no-dedupe`.
+Located at `.ario-deploy/transaction-cache.json` (relative to cwd). Maps SHA-256 file hashes to `{transactionId, createdAtTimestamp, lastUsedTimestamp}`; compressed uploads use `<encoding>:<hash>` keys so they never reuse uncompressed transactions. LRU eviction at configurable max entries (default 10,000). Disable with `--no-dedupe`. Separately, files identical to another file in the same run share one upload, keyed on MIME type + content so the `Content-Type` tag stays correct; this applies even with `--no-dedupe`, since it reuses nothing from earlier deploys.
 
 ### Incremental Uploads (`--incremental`, opt-in)
 
