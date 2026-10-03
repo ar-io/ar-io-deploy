@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@ar.io/sdk':
-        specifier: 4.0.2-alpha.4
-        version: 4.0.2-alpha.4(bufferutil@4.1.0)(fastestsmallesttextencoderdecoder@1.0.22)(typescript@5.9.3)(utf-8-validate@6.0.6)
+        specifier: ^4.5.0
+        version: 4.5.0(bufferutil@4.1.0)(fastestsmallesttextencoderdecoder@1.0.22)(typescript@5.9.3)(utf-8-validate@6.0.6)
       '@ardrive/turbo-sdk':
         specifier: ^2.1.0
         version: 2.1.0(bufferutil@4.1.0)(fastestsmallesttextencoderdecoder@1.0.22)(typescript@5.9.3)(utf-8-validate@6.0.6)(x402-fetch@1.1.0(@solana/sysvars@6.9.0(fastestsmallesttextencoderdecoder@1.0.22)(typescript@5.9.3))(@tanstack/query-core@5.95.2)(@tanstack/react-query@5.95.2(react@18.3.1))(bufferutil@4.1.0)(fastestsmallesttextencoderdecoder@1.0.22)(react@18.3.1)(typescript@5.9.3)(utf-8-validate@6.0.6))(zod@4.3.6)
@@ -145,13 +145,13 @@ packages:
     resolution: {integrity: sha512-30iZtAPgz+LTIYoeivqYo853f02jBYSd5uGnGpkFV0M3xOt9aN73erkgYAmZU43x4VfqcnLxW9Kpg3R5LC4YYw==}
     engines: {node: '>=6.0.0'}
 
-  '@ar.io/sdk@4.0.2-alpha.4':
-    resolution: {integrity: sha512-ZpvZ94JgJ9O8oAnT7U8YlivRGhW58m3OeKDF8ZphjdmYpRJsOCyh8VFI3N++nXp5SA8qDgl1jktP+mCZ7RtjwA==}
+  '@ar.io/sdk@4.5.0':
+    resolution: {integrity: sha512-vEtiS/SMaHlkkgv0TZYGwQ1VTETkDFhY8B6EYDU3FXDCd85EcUAqN9Pl70A79tUtSCZyoVrgmqpchN5W05tTNA==}
     engines: {node: '>=18'}
     hasBin: true
 
-  '@ar.io/solana-contracts@1.0.0':
-    resolution: {integrity: sha512-/rmxIyViK9USkedcn4zrHWkg+tGBE160PSbJ2xwEcugtXDSOf5Cc0E6R8YoG7HT5oKkU0QY1QEeSeVvcYgMYBQ==}
+  '@ar.io/solana-contracts@1.4.0':
+    resolution: {integrity: sha512-hvWukXbEnhLoQH+V+xcQsiJ2/VF+GcyKTE0mPzZzKZdKJpwZIyKVDrBxukT34VZWdakRheQFiIbmp5raMDzcMA==}
     peerDependencies:
       '@solana/kit': '>=6 <7'
 
@@ -6966,9 +6966,9 @@ snapshots:
       '@jridgewell/gen-mapping': 0.3.13
       '@jridgewell/trace-mapping': 0.3.31
 
-  '@ar.io/sdk@4.0.2-alpha.4(bufferutil@4.1.0)(fastestsmallesttextencoderdecoder@1.0.22)(typescript@5.9.3)(utf-8-validate@6.0.6)':
+  '@ar.io/sdk@4.5.0(bufferutil@4.1.0)(fastestsmallesttextencoderdecoder@1.0.22)(typescript@5.9.3)(utf-8-validate@6.0.6)':
     dependencies:
-      '@ar.io/solana-contracts': 1.0.0(@solana/kit@6.9.0(bufferutil@4.1.0)(fastestsmallesttextencoderdecoder@1.0.22)(typescript@5.9.3)(utf-8-validate@6.0.6))
+      '@ar.io/solana-contracts': 1.4.0(@solana/kit@6.9.0(bufferutil@4.1.0)(fastestsmallesttextencoderdecoder@1.0.22)(typescript@5.9.3)(utf-8-validate@6.0.6))
       '@noble/hashes': 1.8.0
       '@solana-program/address-lookup-table': 0.11.0(@solana/kit@6.9.0(bufferutil@4.1.0)(fastestsmallesttextencoderdecoder@1.0.22)(typescript@5.9.3)(utf-8-validate@6.0.6))
       '@solana-program/compute-budget': 0.15.0(@solana/kit@6.9.0(bufferutil@4.1.0)(fastestsmallesttextencoderdecoder@1.0.22)(typescript@5.9.3)(utf-8-validate@6.0.6))
@@ -6985,7 +6985,7 @@ snapshots:
       - typescript
       - utf-8-validate
 
-  '@ar.io/solana-contracts@1.0.0(@solana/kit@6.9.0(bufferutil@4.1.0)(fastestsmallesttextencoderdecoder@1.0.22)(typescript@5.9.3)(utf-8-validate@6.0.6))':
+  '@ar.io/solana-contracts@1.4.0(@solana/kit@6.9.0(bufferutil@4.1.0)(fastestsmallesttextencoderdecoder@1.0.22)(typescript@5.9.3)(utf-8-validate@6.0.6))':
     dependencies:
       '@noble/hashes': 1.8.0
       '@solana/kit': 6.9.0(bufferutil@4.1.0)(fastestsmallesttextencoderdecoder@1.0.22)(typescript@5.9.3)(utf-8-validate@6.0.6)
