@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 import { CACHE_DIR, CACHE_FILE } from '../constants/cache.js'
+import { ARWEAVE_TX_ID_REGEX } from './constants.js'
 
 export interface TransactionCacheEntry {
   createdAtTimestamp: number
@@ -13,26 +14,46 @@ export interface TransactionCacheEntry {
 export type TransactionCache = Record<string, TransactionCacheEntry>
 
 /**
- * Get the path to the cache file in the current working directory
+ * Get the path to the cache file in the current working directory.
+ *
+ * @param scope - Which Turbo network the ids belong to. Production uses the
+ *   historic file; any other network (the development sandbox, a self-hosted
+ *   bundler) gets its own, because an id from one network can point at data
+ *   the other's gateways never serve.
  */
-export function getCachePath(): string {
-  return path.join(process.cwd(), CACHE_DIR, CACHE_FILE)
+export function getCachePath(scope?: string): string {
+  const file = scope ? CACHE_FILE.replace(/\.json$/, `.${scope}.json`) : CACHE_FILE
+  return path.join(process.cwd(), CACHE_DIR, file)
 }
 
 /**
- * Load the transaction cache from disk
- * Returns an empty object if the cache file doesn't exist or is invalid
+ * Load the transaction cache from disk.
+ *
+ * Returns an empty cache if the file is missing or unparseable, and drops any
+ * entry whose id is not a well-formed Arweave id: a manifest built from one
+ * would silently omit the file.
  */
-export function loadCache(): TransactionCache {
-  const cachePath = getCachePath()
+export function loadCache(scope?: string): TransactionCache {
+  const cachePath = getCachePath(scope)
 
   try {
     if (!fs.existsSync(cachePath)) {
       return {}
     }
 
-    const content = fs.readFileSync(cachePath, 'utf8')
-    return JSON.parse(content) as TransactionCache
+    const parsed: unknown = JSON.parse(fs.readFileSync(cachePath, 'utf8'))
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      return {}
+    }
+
+    return Object.fromEntries(
+      Object.entries(parsed as Record<string, unknown>).filter(
+        ([, entry]) =>
+          typeof entry === 'object' &&
+          entry !== null &&
+          ARWEAVE_TX_ID_REGEX.test(String((entry as TransactionCacheEntry).transactionId)),
+      ),
+    ) as TransactionCache
   } catch {
     // If the cache is corrupted or unreadable, start fresh
     return {}
@@ -49,8 +70,8 @@ export function loadCache(): TransactionCache {
  * and precisely when the cache matters most. `renameSync` is atomic within a
  * directory on both POSIX and Windows.
  */
-export function saveCache(cache: TransactionCache): void {
-  const cachePath = getCachePath()
+export function saveCache(cache: TransactionCache, scope?: string): void {
+  const cachePath = getCachePath(scope)
   const cacheDir = path.dirname(cachePath)
 
   if (!fs.existsSync(cacheDir)) {
@@ -94,13 +115,27 @@ export async function hashFile(filePath: string): Promise<string> {
  * manifest keys — a gateway looks up `assets/app.js`, so a manifest written
  * as `assets\app.js` 404s every nested asset. Normalizing here also keeps
  * the `dir/index.html` directory-index check working on every platform.
+ *
+ * Symlinks are followed only while they stay inside the folder. A link out of
+ * it (to `~/.ssh`, say) would publish that file permanently and publicly, so
+ * it is refused before anything is uploaded.
  */
 export function getAllFiles(dirPath: string, basePath: string = dirPath): string[] {
   const files: string[] = []
+  const root = fs.realpathSync(basePath)
 
   for (const item of fs.readdirSync(dirPath)) {
     const fullPath = path.join(dirPath, item)
     const stats = fs.statSync(fullPath)
+
+    if (fs.lstatSync(fullPath).isSymbolicLink()) {
+      const target = fs.realpathSync(fullPath)
+      if (target !== root && !target.startsWith(root + path.sep)) {
+        throw new Error(
+          `${path.relative(basePath, fullPath)} links outside the deploy folder (to ${target}); refusing to publish it. Remove the link or copy the file in.`,
+        )
+      }
+    }
 
     if (stats.isDirectory()) {
       files.push(...getAllFiles(fullPath, basePath))

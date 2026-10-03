@@ -41,7 +41,7 @@ solana-keygen export-private-key  # base58 key for DEPLOY_KEY / ARNS_KEY
 ### Fund Uploads
 
 - **Pre-fund**: Buy Turbo credits at https://turbo.ardrive.io
-- **On-demand**: Use `--on-demand ario` to auto-convert ARIO tokens during deploy
+- **On-demand**: `--on-demand ario --max-token-amount 1.5` with a Solana upload key (`--sig-type solana`); EVM keys use `base-eth` or `base-usdc`
 
 ### Set Environment Variables
 
@@ -144,7 +144,8 @@ npx @ar.io/deploy deploy
 - `--arns-name myapp` — update ArNS record
 - `--arns-wallet ./id.json` — Solana wallet for ArNS authority
 - `--undername staging` — deploy to a subdomain (e.g., `staging_myapp.ar.io`)
-- `--on-demand ario` — auto-fund upload if balance is low
+- `--on-demand ario --max-token-amount 1.5` — top up once if credits run short (Solana upload key; EVM keys use `base-eth`)
+- `--dev` — use the Turbo development sandbox for upload and payment
 - `--no-dedupe` — force re-upload all files (identical files within one deploy are still uploaded once)
 - `--compress gzip` — compress HTML/JS/CSS/JSON before upload (~5-8x cheaper); pair with `--compress-exclude "llms*.txt,*.md"` for files plain HTTP clients fetch
 - `--incremental` — find files already uploaded by this wallet on chain, so a CI deploy with no local cache pays only for what changed (uploads take about 5-7 minutes to become findable)
@@ -205,7 +206,7 @@ jobs:
           node-version: '20'
       - run: npm ci
       - run: npm run build
-      - uses: ar-io/ar-io-deploy@v1.0.0
+      - uses: ar-io/ar-io-deploy@v2.0.0
         with:
           deploy-key: ${{ secrets.DEPLOY_KEY }}
           arns-key: ${{ secrets.ARNS_KEY }}

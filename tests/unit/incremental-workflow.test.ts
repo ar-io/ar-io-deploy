@@ -11,6 +11,7 @@ import { CACHE_DIR, CACHE_FILE } from '../../src/constants/cache.js'
 import { FILE_HASH_TAG } from '../../src/constants/incremental.js'
 import type { TransactionCache } from '../../src/utils/cache.js'
 import { incrementalCacheKey, ownerAddressFromPublicKey } from '../../src/utils/incremental.js'
+import { DATA_ITEM_HEADER_BYTES } from '../../src/utils/turbo.js'
 import { runUploadWorkflow } from '../../src/workflows/upload-workflow.js'
 import { TEST_ARWEAVE_WALLET } from '../constants.js'
 import { mockInsufficientBalance } from '../mocks/turbo-handlers.js'
@@ -295,10 +296,14 @@ describe('runUploadWorkflow with --incremental', () => {
     )
 
     // A single file has no manifest, so there is nothing to reuse into: no
-    // gateway lookup, and the plain hash-keyed entry the file path has always
-    // written rather than an incremental one.
+    // gateway lookup. It is still cached, under the content-and-type key.
     expect(seen).toHaveLength(0)
-    expect(Object.keys(readCache()).every((key) => /^[\da-f]{64}$/.test(key))).toBe(true)
+    expect(Object.keys(readCache())).toEqual([
+      incrementalCacheKey(
+        crypto.createHash('sha256').update('<html>index</html>').digest('hex'),
+        'text/html',
+      ),
+    ])
   })
 })
 
@@ -326,12 +331,22 @@ function capturePriceRequests(): string[] {
   return seen
 }
 
-/** Six distinct 60 KB chunks: the folder and any pair clear the free tier. */
+/** Bytes of chunk `i`: each over the free limit, and each a different size. */
+const chunkBytes = (i: number): number => 120_000 + i * 1000
+
+/**
+ * Six chunks Turbo bills individually. Distinct sizes, so the quotes show
+ * exactly which chunks were priced.
+ */
 function writeBigFolder(): void {
   for (let i = 0; i < 6; i++) {
-    fs.writeFileSync(path.join(folder, `chunk-${i}.txt`), String(i).repeat(60_000))
+    fs.writeFileSync(path.join(folder, `chunk-${i}.txt`), String(i).repeat(chunkBytes(i)))
   }
 }
+
+/** The data item sizes a quote is asked for: payload plus header allowance. */
+const quotedSizes = (...chunks: number[]): string[] =>
+  chunks.map((i) => String(chunkBytes(i) + DATA_ITEM_HEADER_BYTES)).sort()
 
 describe('the credits pre-flight prices what will actually be sent', () => {
   it('does not quote the whole bundle when nothing changed', async () => {
@@ -351,16 +366,16 @@ describe('the credits pre-flight prices what will actually be sent', () => {
     expect(quoted).toEqual([])
   })
 
-  it('still quotes the whole folder without --incremental', async () => {
+  it('quotes every chunk without --incremental', async () => {
     writeBigFolder()
     const quoted = capturePriceRequests()
     server.use(uploadHandler())
 
     await runUploadWorkflow(DEPLOY_KEY, config({ incremental: false }), io)
 
-    // Unchanged behaviour for anyone who did not opt in.
-    expect(quoted).toHaveLength(1)
-    expect(Number(quoted[0])).toBeGreaterThan(350_000)
+    // A first deploy with nothing to reuse pays for every chunk. The small
+    // files and the manifest are within the free limit, so are not quoted.
+    expect([...quoted].sort()).toEqual(quotedSizes(0, 1, 2, 3, 4, 5))
   })
 
   it('quotes only the chunks that changed, not the folder', async () => {
@@ -377,11 +392,8 @@ describe('the credits pre-flight prices what will actually be sent', () => {
 
     await runUploadWorkflow(DEPLOY_KEY, config(), io)
 
-    expect(quoted).toHaveLength(1)
-    // Two 60,000-byte chunks plus the manifest (always uploaded, estimated at a
-    // few hundred bytes for this folder), not the ~360 KB folder.
-    expect(Number(quoted[0])).toBeGreaterThan(120_000)
-    expect(Number(quoted[0])).toBeLessThan(121_000)
+    // Only the two changed chunks are billed; the manifest is under the free limit.
+    expect([...quoted].sort()).toEqual(quotedSizes(0, 1))
   })
 })
 

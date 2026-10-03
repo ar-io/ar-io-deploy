@@ -22,7 +22,6 @@ describe('deployKeyFromWalletFile', () => {
   it('trims raw private keys for EVM-style chains', () => {
     expect(deployKeyFromWalletFile('ethereum', '  0xabc123  \n')).toBe('0xabc123')
     expect(deployKeyFromWalletFile('polygon', ' deadbeef ')).toBe('deadbeef')
-    expect(deployKeyFromWalletFile('kyve', ' key ')).toBe('key')
   })
 })
 
@@ -33,7 +32,8 @@ describe('deployKeyFromPrivateKey', () => {
   })
 
   it('trims a Solana base58 secret key', () => {
-    expect(deployKeyFromPrivateKey('solana', '  base58key  ')).toBe('base58key')
+    const key = bs58.encode(Buffer.alloc(64, 3))
+    expect(deployKeyFromPrivateKey('solana', `  ${key}  `)).toBe(key)
   })
 
   it('trims raw private keys for EVM-style chains', () => {

@@ -8,7 +8,12 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { hashFile, type TransactionCache } from '../../src/utils/cache.js'
 import { parseCompressionConfig } from '../../src/utils/compression.js'
 import type { UploadClient, UploadFileArgs } from '../../src/utils/upload-types.js'
-import { planFolderUpload, uploadFile, uploadFolder } from '../../src/utils/uploader.js'
+import {
+  planFileUpload,
+  planFolderUpload,
+  uploadFile,
+  uploadFolder,
+} from '../../src/utils/uploader.js'
 
 interface Upload {
   body: Buffer
@@ -243,10 +248,11 @@ describe('compressed uploads', () => {
     write('bundle.js', PAGE)
 
     const { client, uploads } = stubClient()
-    await uploadFile(client, path.join(folder, 'bundle.js'), {
+    const plan = await planFileUpload(path.join(folder, 'bundle.js'), {
       cache: {},
       compression: parseCompressionConfig('gzip'),
     })
+    await uploadFile(client, plan)
 
     expect(uploads[0].tags['Content-Encoding']).toBe('gzip')
     expect(zlib.gunzipSync(uploads[0].body).toString('utf8')).toBe(PAGE)

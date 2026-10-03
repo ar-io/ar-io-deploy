@@ -60,7 +60,6 @@ export async function promptSignerType(): Promise<string> {
       { name: 'Arweave', value: 'arweave' },
       { name: 'Ethereum', value: 'ethereum' },
       { name: 'Polygon', value: 'polygon' },
-      { name: 'KYVE', value: 'kyve' },
       { name: 'Solana', value: 'solana' },
     ],
     default: 'arweave',

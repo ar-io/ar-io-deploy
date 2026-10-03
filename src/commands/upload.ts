@@ -1,21 +1,20 @@
-import fs from 'node:fs'
-
 import { Command } from '@oclif/core'
 
 import { type UploadConfig, uploadFlagConfigs } from '../constants/flags.js'
 import { getWalletConfig } from '../prompts/wallet.js'
 import { chalk } from '../utils/chalk.js'
-import { extractFlags, resolveConfig } from '../utils/config-resolver.js'
-import { deployKeyFromPrivateKey, deployKeyFromWalletFile } from '../utils/deploy-key.js'
 import {
-  type DisplayRow,
-  formatDisplayRows,
-  formatUploadCost,
-  formatUploadError,
-  formatUploadSize,
-} from '../utils/display.js'
-import { expandPath } from '../utils/path.js'
-import { validateIncrementalDedupe } from '../utils/validators.js'
+  canPrompt,
+  isPromptCancel,
+  MISSING_UPLOAD_KEY,
+  reportFailure,
+  resolveKey,
+  uploadResultRows,
+  uploadWorkflowConfig,
+  workflowIo,
+} from '../utils/command-helpers.js'
+import { defaultedFlags, extractFlags, resolveConfig } from '../utils/config-resolver.js'
+import { formatDisplayRows } from '../utils/display.js'
 import { runUploadWorkflow } from '../workflows/upload-workflow.js'
 
 export default class Upload extends Command {
@@ -28,158 +27,67 @@ export default class Upload extends Command {
     '<%= config.bin %> upload --wallet ./wallet.json --deploy-folder ./dist',
     '<%= config.bin %> upload --wallet ./wallet.json --deploy-folder ./dist --incremental',
     '<%= config.bin %> upload --wallet ./wallet.json --deploy-file ./dist/index.html',
-    '<%= config.bin %> upload --private-key "$(cat wallet.json)" --on-demand ario --max-token-amount 1.5',
-    '<%= config.bin %> upload --wallet ./wallet.json --uploader https://turbo.ardrive.io',
+    '<%= config.bin %> upload --wallet ./id.json --sig-type solana --on-demand ario --max-token-amount 1.5',
+    '<%= config.bin %> upload --wallet ./wallet.json --dev',
+    '<%= config.bin %> upload --wallet ./wallet.json --paid-by <payer-address>',
     '<%= config.bin %> upload --wallet ./id.json --sig-type solana',
   ]
 
   static override flags = extractFlags(uploadFlagConfigs)
 
   public async run(): Promise<void> {
+    const { flags, metadata } = await this.parse(Upload)
+
     try {
-      const { flags } = await this.parse(Upload)
-
-      const interactive = !flags.wallet && !flags['private-key'] && !process.env.DEPLOY_KEY?.trim()
-
+      // Prompt only where someone can answer: never in CI, never without a terminal.
+      const hasKey = Boolean(flags.wallet || flags['private-key'] || process.env.DEPLOY_KEY?.trim())
+      const interactive = !hasKey && canPrompt()
       if (interactive) {
         this.log(chalk.bold(chalk.cyan('\nInteractive upload mode\n')))
       }
 
-      const baseConfig = (await resolveConfig<typeof uploadFlagConfigs>(uploadFlagConfigs, flags, {
+      const baseConfig = (await resolveConfig(uploadFlagConfigs, flags, {
+        defaulted: defaultedFlags(metadata),
         interactive,
       })) as UploadConfig
 
-      let walletConfig: { privateKey?: string; wallet?: string } = {
-        privateKey: baseConfig['private-key'],
-        wallet: baseConfig.wallet,
-      }
-
-      if (interactive && !baseConfig.wallet && !baseConfig['private-key']) {
-        const config = await getWalletConfig({
+      let key = { privateKey: baseConfig['private-key'], wallet: baseConfig.wallet }
+      if (interactive) {
+        const answer = await getWalletConfig({
           envVar: 'DEPLOY_KEY',
           label: 'upload key',
           purpose: 'pays for the upload',
         })
-        walletConfig = {
-          privateKey: config.privateKey,
-          wallet: config.wallet,
-        }
-      }
-
-      const effectiveCacheMaxEntries = baseConfig['no-dedupe']
-        ? 0
-        : baseConfig['dedupe-cache-max-entries']
-
-      /*
-       * `--no-dedupe` is refused by oclif exclusivity; this catches the other
-       * way of saying the same thing, so both spellings fail identically
-       * instead of one being silently honoured.
-       */
-      const incrementalConflict = validateIncrementalDedupe(
-        baseConfig.incremental,
-        effectiveCacheMaxEntries,
-      )
-      if (incrementalConflict !== true) {
-        this.error(incrementalConflict)
-      }
-
-      const uploadCfg = {
-        compress: baseConfig.compress,
-        'compress-exclude': baseConfig['compress-exclude'],
-        'dedupe-cache-max-entries': effectiveCacheMaxEntries,
-        'deploy-file': baseConfig['deploy-file'],
-        'deploy-folder': baseConfig['deploy-folder'],
-        'fallback-file': baseConfig['fallback-file'],
-        incremental: baseConfig.incremental,
-        'incremental-gateway': baseConfig['incremental-gateway'],
-        'max-token-amount': baseConfig['max-token-amount'],
-        'on-demand': baseConfig['on-demand'],
-        'sig-type': baseConfig['sig-type'],
-        uploader: baseConfig.uploader,
-      }
-
-      if (interactive) {
+        key = { privateKey: answer.privateKey, wallet: answer.wallet }
         this.log('')
       }
 
-      const { privateKey, wallet } = walletConfig
-      const sigType = uploadCfg['sig-type']
-
-      let deployKey: string
-      if (wallet) {
-        const walletPath = expandPath(wallet)
-        if (!fs.existsSync(walletPath)) {
-          this.error(`Wallet file [${wallet}] does not exist`)
-        }
-
-        const walletContent = fs.readFileSync(walletPath, 'utf8')
-        deployKey = deployKeyFromWalletFile(sigType, walletContent)
-      } else if (privateKey) {
-        deployKey = deployKeyFromPrivateKey(sigType, privateKey)
-      } else {
-        deployKey = process.env.DEPLOY_KEY || ''
-        if (!deployKey) {
-          this.error(
-            'DEPLOY_KEY environment variable not set. Use --wallet, --private-key, or set DEPLOY_KEY',
-          )
-        }
+      const config = uploadWorkflowConfig(baseConfig)
+      if (typeof config === 'string') {
+        this.error(config)
       }
+
+      const deployKey = resolveKey({
+        envVar: 'DEPLOY_KEY',
+        missing: MISSING_UPLOAD_KEY,
+        privateKey: key.privateKey,
+        sigType: config['sig-type'],
+        walletPath: key.wallet,
+      })
 
       this.log(chalk.bold(chalk.cyan('\nStarting upload...\n')))
+      const result = await runUploadWorkflow(deployKey, config, workflowIo)
 
-      try {
-        const uploadResult = await runUploadWorkflow(deployKey, uploadCfg, {
-          error: (msg) => this.error(msg),
-        })
-        const txOrManifestId = uploadResult.transactionId
-
-        this.log('')
-
-        const uploadSize = uploadResult.size
-
-        const rows: DisplayRow[] = [['Tx ID', chalk.green(txOrManifestId)]]
-        if (uploadSize) {
-          rows.push(['Upload size', chalk.blue(formatUploadSize(uploadSize))])
-        }
-
-        if (uploadResult.cost) {
-          rows.push(['Upload cost', chalk.blue(formatUploadCost(uploadResult.cost))])
-        }
-
-        if (uploadCfg.uploader) {
-          rows.push(['Bundler service', chalk.cyan(uploadCfg.uploader)])
-        }
-
-        rows.push(['Arweave URL', chalk.yellow(`https://turbo-gateway.com/${txOrManifestId}`)])
-
-        this.log(chalk.bold(chalk.green('Upload successful!')))
-        this.log(formatDisplayRows(rows))
-      } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : String(error)
-        const normalizedError = errorMessage.startsWith('Upload failed:')
-          ? errorMessage.replace(/^Upload failed:\s*/, '')
-          : errorMessage
-
-        if (!process.env.CI && process.stdout.isTTY) {
-          this.log(`\n${formatUploadError(normalizedError)}`)
-          this.exit(1)
-        }
-
-        this.error(
-          chalk.red(
-            errorMessage.startsWith('Upload failed:')
-              ? errorMessage
-              : `Upload failed: ${errorMessage}`,
-          ),
-        )
-      }
+      this.log('')
+      this.log(chalk.bold(chalk.green('Upload successful!')))
+      this.log(formatDisplayRows(uploadResultRows(result, config)))
     } catch (error) {
-      if (error instanceof Error && error.name === 'ExitPromptError') {
+      if (isPromptCancel(error)) {
         this.log(chalk.yellow('\n\nUpload cancelled'))
-        this.exit(0)
+        this.exit(130)
       }
 
-      throw error
+      reportFailure(this, error, 'Upload failed')
     }
   }
 }

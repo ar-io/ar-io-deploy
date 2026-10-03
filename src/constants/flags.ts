@@ -1,19 +1,36 @@
 import { Flags } from '@oclif/core'
 
 import { promptArnsName, promptCluster } from '../prompts/arns.js'
-import { promptDeployTarget } from '../prompts/deployment.js'
+import { type DeployTarget, promptDeployTarget } from '../prompts/deployment.js'
 import { promptSignerType } from '../prompts/wallet.js'
 import { CONTENT_ENCODINGS } from '../utils/compression.js'
-import { createFlagConfig, type ResolvedConfig } from '../utils/config-resolver.js'
+import {
+  createFlagConfig,
+  type PromptContext,
+  type ResolvedConfig,
+} from '../utils/config-resolver.js'
 import { TTL_MAX, TTL_MIN } from '../utils/constants.js'
+import { ALL_ON_DEMAND_TOKENS } from '../utils/turbo.js'
 import {
   validateFileExists,
   validateFolderExists,
+  validateTokenAmount,
   validateTtl,
   validateUndername,
 } from '../utils/validators.js'
 import { DEFAULT_CACHE_MAX_ENTRIES } from './cache.js'
 import { DEFAULT_INCREMENTAL_GATEWAY } from './incremental.js'
+
+/** Ask "file or folder?" once per run, whichever of the two flags asks first. */
+function deployTarget(context: PromptContext): Promise<DeployTarget> {
+  let target = context.memo.get('deploy-target') as Promise<DeployTarget> | undefined
+  if (!target) {
+    target = promptDeployTarget()
+    context.memo.set('deploy-target', target)
+  }
+
+  return target
+}
 
 /**
  * Global flag definitions - single source of truth for all flags
@@ -27,7 +44,6 @@ export const globalFlags = {
       required: false,
     }),
     prompt: promptArnsName,
-    triggersInteractive: true,
   }),
   arnsPrivateKey: createFlagConfig<string | undefined>({
     flag: Flags.string({
@@ -101,8 +117,9 @@ export const globalFlags = {
       },
       required: false,
     }),
-    async prompt() {
-      const target = await promptDeployTarget()
+    async prompt(context) {
+      if (context.provided.has('deploy-folder')) return
+      const target = await deployTarget(context)
       return target.type === 'file' ? target.path : undefined
     },
   }),
@@ -121,15 +138,33 @@ export const globalFlags = {
       },
       required: false,
     }),
-    async prompt() {
-      const target = await promptDeployTarget()
-      return target.type === 'folder' ? target.path : './dist'
+    async prompt(context) {
+      if (context.provided.has('deploy-file')) return
+      const target = await deployTarget(context)
+      return target.type === 'folder' ? target.path : undefined
     },
+  }),
+  dev: createFlagConfig<boolean>({
+    flag: Flags.boolean({
+      default: false,
+      description:
+        "Use Turbo's development sandbox: the sandbox upload and payment services together, and testnet RPCs for --on-demand funding. --uploader and --payment-url still override either service.",
+      required: false,
+    }),
   }),
   fallbackFile: createFlagConfig<string | undefined>({
     flag: Flags.string({
       description:
         'Path (relative to the deploy folder) served for routes the manifest does not list. Defaults to 404.html when present.',
+      required: false,
+    }),
+  }),
+  ignoreApprovals: createFlagConfig<boolean>({
+    flag: Flags.boolean({
+      default: false,
+      description:
+        "Ignore credits other wallets have shared with the upload key; pay only from the key's own balance.",
+      exclusive: ['paid-by'],
       required: false,
     }),
   }),
@@ -153,7 +188,17 @@ export const globalFlags = {
   // Advanced payment settings
   maxTokenAmount: createFlagConfig<string | undefined>({
     flag: Flags.string({
-      description: 'Maximum token amount for on-demand payment',
+      dependsOn: ['on-demand'],
+      description:
+        'Most the --on-demand top-up may spend, in whole tokens (e.g. 0.5). Caps the whole deploy, not each file.',
+      async parse(input) {
+        const validation = validateTokenAmount(input)
+        if (validation !== true) {
+          throw new Error(validation)
+        }
+
+        return input
+      },
       required: false,
     }),
   }),
@@ -166,8 +211,25 @@ export const globalFlags = {
   }),
   onDemand: createFlagConfig<string | undefined>({
     flag: Flags.string({
-      description: 'Enable on-demand payment with specified token (ario or base-eth)',
-      options: ['ario', 'base-eth'],
+      dependsOn: ['max-token-amount'],
+      description:
+        'Top up Turbo credits with this token if the balance cannot cover the upload. Solana keys: ario, solana, solana-usdc. EVM keys: base-eth, base-usdc. Requires --max-token-amount.',
+      options: [...ALL_ON_DEMAND_TOKENS],
+      required: false,
+    }),
+  }),
+  paidBy: createFlagConfig<string | undefined>({
+    flag: Flags.string({
+      description:
+        'Comma-separated addresses whose shared credits pay for the upload. Defaults to every wallet that has shared credits with the upload key.',
+      exclusive: ['ignore-approvals'],
+      required: false,
+    }),
+  }),
+  paymentUrl: createFlagConfig<string | undefined>({
+    flag: Flags.string({
+      description:
+        'Custom Turbo payment service URL, used for balance checks, pricing and on-demand top-ups. Follows --uploader when that is the development sandbox.',
       required: false,
     }),
   }),
@@ -191,10 +253,18 @@ export const globalFlags = {
       char: 's',
       default: 'arweave',
       description: 'Signer type for the upload key (pays for the upload).',
-      options: ['arweave', 'ethereum', 'polygon', 'kyve', 'solana'],
+      options: ['arweave', 'ethereum', 'polygon', 'solana'],
       required: false,
     }),
     prompt: promptSignerType,
+  }),
+  skipArnsCheck: createFlagConfig<boolean>({
+    flag: Flags.boolean({
+      default: false,
+      description:
+        'Update the ArNS record even if the ArNS key does not appear to own or control the name (e.g. right after a transfer). Without it, such a deploy is refused before uploading.',
+      required: false,
+    }),
   }),
   ttlSeconds: createFlagConfig<string>({
     flag: Flags.string({
@@ -230,8 +300,9 @@ export const globalFlags = {
   }),
   uploader: createFlagConfig<string | undefined>({
     flag: Flags.string({
+      aliases: ['upload-url'],
       description:
-        'Custom Turbo upload service base URL. Omit for ArDrive production: https://upload.ardrive.io.',
+        'Custom Turbo upload service URL. Omit for production (https://upload.ardrive.io); see --dev for the sandbox.',
       required: false,
     }),
   }),
@@ -239,6 +310,13 @@ export const globalFlags = {
     flag: Flags.boolean({
       default: false,
       description: 'Update an ArNS/ANT record after upload.',
+      required: false,
+    }),
+  }),
+  useSignerBalanceFirst: createFlagConfig<boolean>({
+    flag: Flags.boolean({
+      default: false,
+      description: "Spend the upload key's own balance before any shared credits.",
       required: false,
     }),
   }),
@@ -262,57 +340,6 @@ export const globalFlags = {
 }
 
 /**
- * Complete set of flags for the deploy command
- */
-export const deployFlags = {
-  'arns-name': globalFlags.arnsName.flag,
-  'arns-private-key': globalFlags.arnsPrivateKey.flag,
-  'arns-wallet': globalFlags.arnsWallet.flag,
-  cluster: globalFlags.cluster.flag,
-  compress: globalFlags.compress.flag,
-  'compress-exclude': globalFlags.compressExclude.flag,
-  'dedupe-cache-max-entries': globalFlags.dedupeCacheMaxEntries.flag,
-  'deploy-file': globalFlags.deployFile.flag,
-  'deploy-folder': globalFlags.deployFolder.flag,
-  'fallback-file': globalFlags.fallbackFile.flag,
-  incremental: globalFlags.incremental.flag,
-  'incremental-gateway': globalFlags.incrementalGateway.flag,
-  'max-token-amount': globalFlags.maxTokenAmount.flag,
-  'no-dedupe': globalFlags.noDedupe.flag,
-  'on-demand': globalFlags.onDemand.flag,
-  'private-key': globalFlags.privateKey.flag,
-  'rpc-url': globalFlags.rpcUrl.flag,
-  'sig-type': globalFlags.sigType.flag,
-  'ttl-seconds': globalFlags.ttlSeconds.flag,
-  undername: globalFlags.undername.flag,
-  uploader: globalFlags.uploader.flag,
-  'use-arns': globalFlags.useArns.flag,
-  wallet: globalFlags.wallet.flag,
-}
-
-/**
- * ArNS-specific flags (subset of deploy flags)
- */
-export const arnsFlags = {
-  'arns-name': globalFlags.arnsName.flag,
-  'arns-private-key': globalFlags.arnsPrivateKey.flag,
-  'arns-wallet': globalFlags.arnsWallet.flag,
-  cluster: globalFlags.cluster.flag,
-  'rpc-url': globalFlags.rpcUrl.flag,
-  'ttl-seconds': globalFlags.ttlSeconds.flag,
-  undername: globalFlags.undername.flag,
-}
-
-/**
- * Wallet/authentication flags (subset of deploy flags)
- */
-export const walletFlags = {
-  'private-key': globalFlags.privateKey.flag,
-  'sig-type': globalFlags.sigType.flag,
-  wallet: globalFlags.wallet.flag,
-}
-
-/**
  * Deploy command configuration type
  */
 export interface DeployConfig {
@@ -325,19 +352,25 @@ export interface DeployConfig {
   'dedupe-cache-max-entries': number
   'deploy-file'?: string
   'deploy-folder': string
+  dev: boolean
   'fallback-file'?: string
+  'ignore-approvals': boolean
   incremental: boolean
   'incremental-gateway': string
   'max-token-amount'?: string
   'no-dedupe': boolean
   'on-demand'?: string
+  'paid-by'?: string
+  'payment-url'?: string
   'private-key'?: string
   'rpc-url'?: string
   'sig-type': string
   'ttl-seconds': string
   undername: string
+  'skip-arns-check': boolean
   'use-arns': boolean
   uploader?: string
+  'use-signer-balance-first': boolean
   wallet?: string
 }
 
@@ -355,19 +388,25 @@ export const deployFlagConfigs = {
   'dedupe-cache-max-entries': globalFlags.dedupeCacheMaxEntries,
   'deploy-file': globalFlags.deployFile,
   'deploy-folder': globalFlags.deployFolder,
+  dev: globalFlags.dev,
   'fallback-file': globalFlags.fallbackFile,
+  'ignore-approvals': globalFlags.ignoreApprovals,
   incremental: globalFlags.incremental,
   'incremental-gateway': globalFlags.incrementalGateway,
   'max-token-amount': globalFlags.maxTokenAmount,
   'no-dedupe': globalFlags.noDedupe,
   'on-demand': globalFlags.onDemand,
+  'paid-by': globalFlags.paidBy,
+  'payment-url': globalFlags.paymentUrl,
   'private-key': globalFlags.privateKey,
   'rpc-url': globalFlags.rpcUrl,
   'sig-type': globalFlags.sigType,
+  'skip-arns-check': globalFlags.skipArnsCheck,
   'ttl-seconds': globalFlags.ttlSeconds,
   undername: globalFlags.undername,
   uploader: globalFlags.uploader,
   'use-arns': globalFlags.useArns,
+  'use-signer-balance-first': globalFlags.useSignerBalanceFirst,
   wallet: globalFlags.wallet,
 } as const
 
@@ -380,15 +419,20 @@ export const uploadFlagConfigs = {
   'dedupe-cache-max-entries': globalFlags.dedupeCacheMaxEntries,
   'deploy-file': globalFlags.deployFile,
   'deploy-folder': globalFlags.deployFolder,
+  dev: globalFlags.dev,
   'fallback-file': globalFlags.fallbackFile,
+  'ignore-approvals': globalFlags.ignoreApprovals,
   incremental: globalFlags.incremental,
   'incremental-gateway': globalFlags.incrementalGateway,
   'max-token-amount': globalFlags.maxTokenAmount,
   'no-dedupe': globalFlags.noDedupe,
   'on-demand': globalFlags.onDemand,
+  'paid-by': globalFlags.paidBy,
+  'payment-url': globalFlags.paymentUrl,
   'private-key': globalFlags.privateKey,
   'sig-type': globalFlags.sigType,
   uploader: globalFlags.uploader,
+  'use-signer-balance-first': globalFlags.useSignerBalanceFirst,
   wallet: globalFlags.wallet,
 } as const
 
