@@ -90,6 +90,8 @@ yarn add --dev @ar.io/deploy
 
 ## Prerequisites
 
+Node.js 20.18 or later.
+
 A deployment uses up to **two independent keys**:
 
 - **Upload key** — pays for the upload. Any supported chain (`--wallet` / `--private-key`, or the `DEPLOY_KEY` env var; chain selected with `--sig-type`).
@@ -279,10 +281,12 @@ ario-deploy deploy --sig-type ethereum --private-key "0x..." --on-demand base-et
 
 **How it works:**
 
-1. Each file the deploy will actually upload is priced through Turbo, against the upload service's own free limit.
+1. Each file the deploy will actually upload is priced through Turbo. A file within the upload service's free size limit is free only while your wallet's free-tier allowance lasts, so once that is spent small files are priced too.
 2. If the credits you can spend (see [Shared credits](#shared-credits)) cover it, nothing is bought.
 3. Otherwise the shortfall plus a 10% buffer is converted at Turbo's quoted rate. If that exceeds `--max-token-amount`, the deploy stops before paying anything.
-4. The top-up is paid once, the deploy waits for Turbo to credit it, then uploads.
+4. The top-up is paid once, and the deploy waits up to two minutes for Turbo to credit it before uploading anything.
+
+If Turbo has not credited the top-up by then, the deploy stops without uploading and records the transfer in `.ario-deploy/`. Re-run once it confirms: the next run waits for that transfer instead of buying another. A transfer the payment service rejects is reported as such, and nothing is uploaded.
 
 ## Shared credits
 
@@ -364,8 +368,12 @@ By default, ario-deploy caches your deployment log to prevent uploading duplicat
 2. It checks the local cache for matching hashes from previous uploads
 3. Files that haven't changed are skipped - the existing transaction ID is reused
 4. Files identical to another file in the same deploy are uploaded once and share its transaction (static exports often write the same payload under several names)
-5. Only new or modified files are uploaded to Arweave
-6. The cache is stored locally in `.ario-deploy/transaction-cache.json`
+5. Only new or modified files are uploaded to Arweave, and each id is written to the cache the moment it lands, so a deploy that fails or is interrupted part-way does not pay for those files again
+6. The cache is stored locally in `.ario-deploy/transaction-cache.json`, with a separate file per Turbo network (`--dev` uploads never stand in for production ones)
+
+Entries are keyed on the file's content and content type (plus encoding when compressed), so byte-identical files served as different types are never confused. Caches written by 1.x, keyed on the hash alone, are still honoured, except for empty files, whose hash says nothing about their type.
+
+Symlinks inside the deploy folder are followed only while they point inside it; a link to a file outside the folder stops the deploy, since uploading it would publish that file permanently.
 
 The Turbo credit check runs after this planning step, so it prices only what will actually be uploaded, not the whole folder.
 
@@ -388,7 +396,7 @@ ario-deploy deploy --wallet ./wallet.json --dedupe-cache-max-entries 1000
 
 **Cache location:**
 
-The cache file is stored at `.ario-deploy/transaction-cache.json` in your project root. You can:
+The cache files are stored in `.ario-deploy/` in your project root. You can:
 
 - Add it to `.gitignore` if you don't want to share cache across team members
 - Commit it to share cached transaction IDs with your team (reduces duplicate uploads)
@@ -417,9 +425,9 @@ Measured on a 1,229-file static docs site, redeployed from a fresh CI runner wit
 
 **The tag invariant:** a data item's id covers its tags, so a tag whose value changes between deploys — a commit SHA above all — moves every file's id on every deploy and defeats deduplication. The failure is silent: the upload succeeds, the manifest is correct, and the bill doubles. In incremental mode files therefore carry only deploy-invariant tags (`App-Name`, `Content-Type`, `File-SHA256`, plus `Content-Encoding` when compressed), and the `GIT-HASH` provenance tag rides on the manifest instead, which is rewritten every deploy anyway. The tag set is asserted in code, so a future addition fails loudly rather than quietly costing money.
 
-**Reuse is keyed on content type as well as content.** Two files with identical bytes served under different types — `a.json` and `b.txt` — stay two uploads, because a gateway serves whatever `Content-Type` the data item carries and collapsing them would serve one of them as the other. Cache entries written in incremental mode are therefore keyed `<sha256>|<mime-type>` (plus `|<encoding>` when compressed); entries written by a plain (non-incremental) run stay keyed on the bare hash, so switching a project to `--incremental` re-uploads once and is cheap from then on.
+**Reuse is keyed on content type as well as content.** Two files with identical bytes served under different types — `a.json` and `b.txt` — stay two uploads, because a gateway serves whatever `Content-Type` the data item carries and collapsing them would serve one of them as the other. Cache entries are therefore keyed `<sha256>|<mime-type>` (plus `|<encoding>` when compressed) in every mode. Incremental mode never falls back to a 1.x hash-only entry, so switching a project to `--incremental` may re-upload once and is cheap from then on.
 
-**What it trusts:** only your own wallet's past transactions, matched on the 43-character address a gateway indexes an owner as — derived locally as `base64url(sha256(publicKey))`, which is correct for all five signer types. Every result is then re-checked here against the owner and the content type the gateway itself reports, because the `owners` filter is applied by whichever host `--incremental-gateway` names, and a wrong id would land in both the permanent manifest and the local cache.
+**What it trusts:** only your own wallet's past transactions, matched on the 43-character address a gateway indexes an owner as — derived locally as `base64url(sha256(publicKey))`, which is correct for all four signer types. Every result is then re-checked against the owner and content type in the gateway's own response, which catches a buggy or misconfigured gateway. It cannot catch a malicious one, since the owner, tags and id all come from that same response: point `--incremental-gateway` only at a gateway you trust, because a wrong id would land in both the permanent manifest and the local cache.
 
 **Limits and caveats:**
 
@@ -482,7 +490,7 @@ Add deployment scripts to your `package.json`:
 These read the upload key from `DEPLOY_KEY` and the Solana ArNS authority key from `ARNS_KEY`. Deploy with:
 
 ```bash
-DEPLOY_KEY=$(base64 -i wallet.json) ARNS_KEY=<base58-solana-secret-key> pnpm deploy
+DEPLOY_KEY=$(base64 -i wallet.json) ARNS_KEY=<base58-solana-secret-key> pnpm run deploy
 ```
 
 Or with on-demand payment in ARIO, which needs a Solana upload key (here the same key does both jobs):
@@ -547,9 +555,11 @@ jobs:
 
 When `preview` is enabled, the action will:
 
-- Auto-generate an undername like `pr-123` from the PR number
-- Post a comment on the PR with the preview URL
+- Auto-generate an undername like `myapp-repo-pr-123` from the repository name and PR number
+- Post a comment on the PR with the preview URL (the token needs `pull-requests: write`)
 - Update the comment on subsequent pushes instead of creating new ones
+
+Preview undernames are not removed when the PR closes; each costs one of the ArNS name's undername slots until you remove it. The action skips every step on a `closed` event, so subscribing to it costs nothing.
 
 ### Production Deployment
 
@@ -688,7 +698,7 @@ jobs:
 
       - run: pnpm install
 
-      - run: pnpm deploy
+      - run: pnpm run deploy
         env:
           DEPLOY_KEY: ${{ secrets.DEPLOY_KEY }}
 ```
@@ -784,7 +794,7 @@ pnpm build
 # Run in development mode
 pnpm dev
 
-# Run tests
+# Run tests (the e2e tests run the built CLI, so build first)
 pnpm test
 
 # Run linter
@@ -799,21 +809,15 @@ pnpm format
 ```
 ar-io-deploy/
 ├── src/
-│   ├── commands/        # oclif commands
-│   │   ├── deploy.ts
-│   │   └── upload.ts
-│   ├── types/           # TypeScript type definitions
-│   │   └── index.ts
-│   ├── utils/           # Utility functions
-│   │   ├── constants.ts
-│   │   ├── signer.ts
-│   │   ├── uploader.ts
-│   │   └── __tests__/   # Unit tests
+│   ├── commands/        # oclif commands: deploy, upload
+│   ├── constants/       # flag definitions (single source of truth), cache constants
+│   ├── prompts/         # interactive prompts
+│   ├── utils/           # uploader, Turbo payments, cache, incremental index, signers
+│   ├── workflows/       # the upload workflow both commands run
 │   └── index.ts         # Main entry point
-├── bin/                 # Executable scripts
-│   ├── run.js
-│   └── dev.js
-├── .husky/              # Git hooks
+├── tests/               # unit and e2e tests (MSW mocks Turbo over HTTP)
+├── bin/                 # run.js (built) and dev.js (tsx)
+├── action.yml           # the GitHub Action
 └── dist/                # Build output
 ```
 

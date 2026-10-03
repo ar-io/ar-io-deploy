@@ -296,10 +296,14 @@ describe('runUploadWorkflow with --incremental', () => {
     )
 
     // A single file has no manifest, so there is nothing to reuse into: no
-    // gateway lookup, and the plain hash-keyed entry the file path has always
-    // written rather than an incremental one.
+    // gateway lookup. It is still cached, under the content-and-type key.
     expect(seen).toHaveLength(0)
-    expect(Object.keys(readCache()).every((key) => /^[\da-f]{64}$/.test(key))).toBe(true)
+    expect(Object.keys(readCache())).toEqual([
+      incrementalCacheKey(
+        crypto.createHash('sha256').update('<html>index</html>').digest('hex'),
+        'text/html',
+      ),
+    ])
   })
 })
 

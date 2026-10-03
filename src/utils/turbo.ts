@@ -8,6 +8,9 @@
  * reason is written next to it.
  */
 
+import fs from 'node:fs'
+import path from 'node:path'
+
 import {
   type CreditShareApproval,
   defaultTurboConfiguration,
@@ -21,10 +24,17 @@ import {
   type TurboWincForTokenResponse,
 } from '@ardrive/turbo-sdk'
 
+import { CACHE_DIR } from '../constants/cache.js'
 import type { SignerType } from '../types/index.js'
 
 /** Upload and payment service URLs, chosen together. */
 export interface TurboServices {
+  /**
+   * Names the network for local state (the dedupe cache, a pending top-up):
+   * undefined for production, the upload service's host otherwise. Ids from
+   * one network must never be reused on another.
+   */
+  cacheScope?: string
   /** True when both services are Turbo's development sandbox. */
   development: boolean
   paymentUrl: string
@@ -33,8 +43,30 @@ export interface TurboServices {
   warnings: string[]
 }
 
+/**
+ * A service base URL without trailing slashes. Turbo appends `/v1/...`, so a
+ * trailing slash would request `//v1/...`, which the services answer with 404
+ * (and a 404 balance reads as an empty one).
+ */
+function normalizeServiceUrl(url: string, flag: string): string {
+  let parsed: URL
+  try {
+    parsed = new URL(url.trim())
+  } catch {
+    throw new Error(`${flag} must be an http(s) URL, e.g. https://upload.ardrive.io (got "${url}")`)
+  }
+
+  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+    throw new Error(`${flag} must be an http(s) URL, e.g. https://upload.ardrive.io (got "${url}")`)
+  }
+
+  return parsed.href.replace(/\/+$/, '')
+}
+
 function sameUrl(a: string | undefined, b: string): boolean {
-  return a !== undefined && a.replace(/\/+$/, '') === b.replace(/\/+$/, '')
+  return (
+    a !== undefined && a.replace(/\/+$/, '').toLowerCase() === b.replace(/\/+$/, '').toLowerCase()
+  )
 }
 
 /**
@@ -56,6 +88,11 @@ export function resolveTurboServices(options: {
   const prod = defaultTurboConfiguration
   const dev = developmentTurboConfiguration
   const warnings: string[] = []
+  options = {
+    ...options,
+    paymentUrl: options.paymentUrl && normalizeServiceUrl(options.paymentUrl, '--payment-url'),
+    uploadUrl: options.uploadUrl && normalizeServiceUrl(options.uploadUrl, '--uploader'),
+  }
 
   const development =
     Boolean(options.dev) ||
@@ -88,7 +125,11 @@ export function resolveTurboServices(options: {
     )
   }
 
-  return { development, paymentUrl, uploadUrl, warnings }
+  const cacheScope = sameUrl(uploadUrl, prod.uploadServiceConfig.url)
+    ? undefined
+    : new URL(uploadUrl).host.replaceAll(/[^\w.-]/g, '_')
+
+  return { cacheScope, development, paymentUrl, uploadUrl, warnings }
 }
 
 /**
@@ -214,6 +255,11 @@ export function resolvePaidBy(
   return paidBy
 }
 
+/** EVM addresses are case-insensitive (checksum casing); others are not. */
+function normalizeAddress(address: string): string {
+  return /^0x[\da-f]{40}$/i.test(address) ? address.toLowerCase() : address
+}
+
 function remainingWinc(approval: CreditShareApproval, now: number): bigint {
   if (approval.expirationDate && Date.parse(approval.expirationDate) <= now) {
     return 0n
@@ -237,9 +283,9 @@ export function spendableWinc(
 ): bigint {
   const own = BigInt(balance.winc)
   if (options.paidBy && options.paidBy.length > 0) {
-    const payers = new Set(options.paidBy)
+    const payers = new Set(options.paidBy.map((address) => normalizeAddress(address)))
     return (balance.receivedApprovals ?? [])
-      .filter((approval) => payers.has(approval.payingAddress))
+      .filter((approval) => payers.has(normalizeAddress(approval.payingAddress)))
       .reduce((sum, approval) => sum + remainingWinc(approval, now), own)
   }
 
@@ -251,34 +297,70 @@ export function spendableWinc(
 }
 
 /**
- * Largest data item the upload service accepts for free, read from the
- * service itself because it differs by network: 105 KiB in production, 5 MiB
- * on the development sandbox. Undefined when the service does not say.
+ * Largest free data item when the upload service does not say: production's
+ * limit, the smaller of the two networks, so the guess errs towards pricing.
  */
-export async function fetchFreeUploadLimit(
+export const FALLBACK_FREE_ITEM_BYTES = 107_520
+
+/**
+ * What an upload can expect for free.
+ *
+ * Turbo uploads an item for free when it is within `maxItemBytes` and the
+ * wallet still has free-tier bytes left: the tier is metered per wallet (and
+ * per network). `bytesRemaining` is null when the wallet is unlimited or the
+ * figure is unavailable.
+ */
+export interface FreeAllowance {
+  bytesRemaining: bigint | null
+  maxItemBytes: number
+}
+
+/** What the upload service says about itself; fields are absent when it does not say. */
+export interface UploadServiceInfo {
+  /** Largest free data item: 105 KiB in production, 5 MiB on the sandbox. */
+  freeUploadLimitBytes?: number
+  /** Gateway that serves this service's uploads first. */
+  gateway?: string
+}
+
+/**
+ * Read the upload service's info endpoint. Its free limit differs by network,
+ * so it is read rather than assumed. Empty when the service cannot be reached.
+ */
+export async function fetchUploadServiceInfo(
   uploadUrl: string,
   fetchImpl: typeof fetch = fetch,
-): Promise<number | undefined> {
+): Promise<UploadServiceInfo> {
   try {
     const response = await fetchImpl(`${uploadUrl.replace(/\/+$/, '')}/`, {
       signal: AbortSignal.timeout(10_000),
     })
     if (!response.ok) {
-      return undefined
+      return {}
     }
 
     const info = (await response.json()) as Partial<TurboInfoResponse>
-    return typeof info.freeUploadLimitBytes === 'number' ? info.freeUploadLimitBytes : undefined
+    return {
+      ...(typeof info.freeUploadLimitBytes === 'number' && {
+        freeUploadLimitBytes: info.freeUploadLimitBytes,
+      }),
+      ...(typeof info.gateway === 'string' && { gateway: info.gateway.replace(/\/+$/, '') }),
+    }
   } catch {
-    return undefined
+    return {}
   }
 }
 
 /**
- * Bytes a data item adds on top of its payload: signature, owner, tags. The
- * same allowance Turbo's own on-demand estimate uses.
+ * Bytes a data item adds on top of its payload: signature, owner, tags.
+ *
+ * Used to decide whether an item fits the free limit, which the upload
+ * service applies to the whole signed item. An Arweave-signed item with this
+ * tool's largest tag set measures 1,219 bytes (Ethereum and Solana about 330),
+ * so this errs above the largest rather than splitting the difference:
+ * guessing "free" for a billed item makes a deploy fail part-way.
  */
-export const DATA_ITEM_HEADER_BYTES = 1200
+export const DATA_ITEM_HEADER_BYTES = 1300
 
 /** Price quotes requested at once, so a large first deploy does not flood the service. */
 const QUOTE_BATCH_SIZE = 20
@@ -290,18 +372,28 @@ export interface PricingClient {
 /**
  * Winc needed to upload these items.
  *
- * Turbo bills per data item, so each is priced on its own: an item within
- * the free limit costs nothing, and the rest are quoted through Turbo's
- * pricing. Pricing the sum instead would charge a folder of small free files
- * as one large paid item.
+ * Turbo bills per data item, so each is priced on its own. An item within the
+ * free size limit costs nothing while the wallet's free-tier bytes last; once
+ * they run out, small items are priced like any other. Pricing the sum instead
+ * would charge a folder of small free files as one large paid item.
  */
 export async function quoteUploadWinc(
   client: PricingClient,
   payloadByteCounts: number[],
-  freeLimitBytes: number,
+  allowance: FreeAllowance,
 ): Promise<bigint> {
-  const itemBytes = payloadByteCounts.map((bytes) => bytes + DATA_ITEM_HEADER_BYTES)
-  const paid = itemBytes.filter((bytes) => bytes > freeLimitBytes)
+  let freeBytesLeft = allowance.bytesRemaining
+  const paid: number[] = []
+  for (const payload of payloadByteCounts) {
+    const bytes = payload + DATA_ITEM_HEADER_BYTES
+    const fitsBudget = freeBytesLeft === null || BigInt(bytes) <= freeBytesLeft
+    if (bytes <= allowance.maxItemBytes && fitsBudget) {
+      if (freeBytesLeft !== null) freeBytesLeft -= BigInt(bytes)
+    } else {
+      paid.push(bytes)
+    }
+  }
+
   if (paid.length === 0) {
     return 0n
   }
@@ -338,6 +430,93 @@ export interface FundingResult {
   txId: string
 }
 
+export interface PollOptions {
+  pollIntervalMs?: number
+  sleep?: (ms: number) => Promise<void>
+  timeoutMs?: number
+}
+
+/**
+ * What a failed `submitFundTransaction` means.
+ *
+ * The payment service answers 400 both for a transaction that will never be
+ * credited (failed on chain, wrong recipient, too small) and for one that is
+ * merely not mined yet, and 404 for one its gateway has not seen yet. Only the
+ * body tells them apart. 403 (sender excluded) is final; 5xx and network
+ * errors are worth retrying.
+ */
+function classifyFundError(error: unknown): { failed: string } | 'retry' {
+  const status = (error as { status?: number } | undefined)?.status
+  const message = error instanceof Error ? error.message : String(error)
+  if (status === 404 || (status === 400 && /not been mined yet/i.test(message))) {
+    return 'retry'
+  }
+
+  if (status === 400 || status === 403) {
+    return { failed: message }
+  }
+
+  return 'retry'
+}
+
+/**
+ * Wait for the payment service to credit a fund transaction.
+ *
+ * Bounded by wall-clock time as well as by attempts: every poll is a POST the
+ * SDK retries with backoff on a 5xx, so counting attempts alone can wait many
+ * times longer than the timeout.
+ *
+ * @returns 'confirmed', or 'pending' when the time ran out.
+ * @throws When the service says the transaction will never be credited.
+ */
+export async function waitForFundTransaction(
+  client: Pick<FundingClient, 'submitFundTransaction'>,
+  txId: string,
+  options: { initial?: FundStatus } & PollOptions = {},
+): Promise<'confirmed' | 'pending'> {
+  const {
+    initial = 'pending',
+    pollIntervalMs = 3000,
+    sleep = (ms) =>
+      new Promise((resolve) => {
+        setTimeout(resolve, ms)
+      }),
+    timeoutMs = 120_000,
+  } = options
+
+  let status: FundStatus = initial
+  const deadline = Date.now() + timeoutMs
+  const maxPolls = Math.ceil(timeoutMs / pollIntervalMs)
+  for (let poll = 0; status === 'pending' && poll < maxPolls && Date.now() < deadline; poll++) {
+    await sleep(pollIntervalMs)
+    try {
+      const result = await client.submitFundTransaction({ txId })
+      status = result.status
+    } catch (error) {
+      const outcome = classifyFundError(error)
+      if (outcome !== 'retry') {
+        throw new Error(`Top-up transaction ${txId} will not be credited: ${outcome.failed}`)
+      }
+    }
+  }
+
+  if (status === 'failed') {
+    throw new Error(`Top-up transaction ${txId} failed`)
+  }
+
+  return status
+}
+
+/**
+ * The fund transaction id in the error `topUpWithTokens` throws when the
+ * tokens were sent but Turbo could not record the payment yet. The transfer
+ * has happened; the id is the only way to collect the credits for it.
+ */
+export function sentTransactionIdFrom(error: unknown): string | undefined {
+  const message = error instanceof Error ? error.message : ''
+  return /submitFundTransaction\(id\)'?:\s*(\S+)\s*$/.exec(message)?.[1]
+}
+
 /**
  * Buy the credits an upload plan is short, in one top-up, before uploading.
  *
@@ -346,33 +525,23 @@ export interface FundingResult {
  * its own top-up, and `--max-token-amount` capped each purchase rather than
  * the deploy. Funding the plan's total once, then uploading against the
  * balance, makes the cap a real cap. The arithmetic matches Turbo's: the
- * shortfall plus a buffer, converted at Turbo's quoted rate, polled until the
- * payment service confirms.
+ * shortfall plus a buffer, converted at Turbo's quoted rate.
+ *
+ * `onSent` hears the transaction id as soon as tokens have moved, before
+ * waiting for credit, so a run that dies while waiting can be resumed rather
+ * than paid for twice.
  */
 export async function fundShortfall(
   client: FundingClient,
   options: {
     bufferMultiplier?: number
     maxTokenAmount: bigint
-    pollIntervalMs?: number
+    onSent?: (txId: string) => void
     shortfallWinc: bigint
-    sleep?: (ms: number) => Promise<void>
-    timeoutMs?: number
     token: TokenType
-  },
+  } & PollOptions,
 ): Promise<FundingResult> {
-  const {
-    bufferMultiplier = 1.1,
-    maxTokenAmount,
-    pollIntervalMs = 3000,
-    shortfallWinc,
-    sleep = (ms) =>
-      new Promise((resolve) => {
-        setTimeout(resolve, ms)
-      }),
-    timeoutMs = 120_000,
-    token,
-  } = options
+  const { bufferMultiplier = 1.1, maxTokenAmount, onSent, shortfallWinc, token } = options
 
   const oneToken = 10n ** BigInt(exponentMap[token])
   const { winc: wincPerToken } = await client.getWincForToken({ tokenAmount: oneToken.toString() })
@@ -393,33 +562,68 @@ export async function fundShortfall(
     )
   }
 
-  const response = await client.topUpWithTokens({ tokenAmount: tokenAmount.toString() })
-  if (response.status === 'failed') {
-    throw new Error(`Top-up transaction ${response.id} failed`)
+  let txId: string
+  let initial: FundStatus
+  try {
+    const response = await client.topUpWithTokens({ tokenAmount: tokenAmount.toString() })
+    txId = response.id
+    initial = response.status
+  } catch (error) {
+    // Tokens sent, payment not yet recorded: keep the id and wait for it.
+    const sent = sentTransactionIdFrom(error)
+    if (!sent) throw error
+    txId = sent
+    initial = 'pending'
   }
 
-  /** The fund transaction's status, or undefined while the service has not seen it yet. */
-  const fetchStatus = async (): Promise<FundStatus | undefined> => {
-    try {
-      const result = await client.submitFundTransaction({ txId: response.id })
-      return result.status
-    } catch {
-      return undefined
+  onSent?.(txId)
+  if (initial === 'failed') {
+    throw new Error(`Top-up transaction ${txId} failed`)
+  }
+
+  const status = await waitForFundTransaction(client, txId, { ...options, initial })
+  return { confirmed: status === 'confirmed', tokenAmount, txId }
+}
+
+/** A top-up whose tokens were sent but whose credits this tool has not seen land. */
+export interface PendingTopUp {
+  createdAt: string
+  token: TokenType
+  txId: string
+}
+
+function pendingTopUpPath(scope?: string): string {
+  return path.join(
+    process.cwd(),
+    CACHE_DIR,
+    scope ? `pending-topup.${scope}.json` : 'pending-topup.json',
+  )
+}
+
+/** The pending top-up recorded by an earlier run, if any. */
+export function loadPendingTopUp(scope?: string): PendingTopUp | undefined {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(pendingTopUpPath(scope), 'utf8')) as PendingTopUp
+    return typeof parsed?.txId === 'string' && typeof parsed.token === 'string' ? parsed : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Record (or, with undefined, forget) a sent top-up. Best effort: failing to
+ * write it must not fail a deploy whose tokens have already moved.
+ */
+export function savePendingTopUp(pending: PendingTopUp | undefined, scope?: string): void {
+  const file = pendingTopUpPath(scope)
+  try {
+    if (pending) {
+      fs.mkdirSync(path.dirname(file), { recursive: true })
+      fs.writeFileSync(file, JSON.stringify(pending, null, 2), 'utf8')
+    } else {
+      fs.rmSync(file, { force: true })
     }
+  } catch {
+    // The id is also printed; losing the file only loses the automatic resume.
   }
-
-  // Widened on purpose: a later poll can still report 'failed'.
-  let current: FundStatus = response.status
-  const maxPolls = Math.ceil(timeoutMs / pollIntervalMs)
-  for (let poll = 0; current !== 'confirmed' && poll < maxPolls; poll++) {
-    await sleep(pollIntervalMs)
-    current = (await fetchStatus()) ?? current
-    if (current === 'failed') {
-      throw new Error(`Top-up transaction ${response.id} failed`)
-    }
-  }
-
-  const confirmed = current === 'confirmed'
-
-  return { confirmed, tokenAmount, txId: response.id }
 }

@@ -1,3 +1,4 @@
+import crypto from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -46,6 +47,8 @@ interface Recorded {
  * Records every upload with its tags, and exposes the manifest — the only item
  * sent as a stream and the only one tagged as a manifest.
  */
+const sha256 = (text: string): string => crypto.createHash('sha256').update(text).digest('hex')
+
 function stubClient(): {
   client: UploadClient
   files: () => Recorded[]
@@ -377,7 +380,6 @@ describe('incremental failure handling', () => {
       incremental: {
         onCacheUpdate: (cache) => recorded.push(Object.keys(cache).length),
       },
-      throwOnFailure: true,
     }).then(
       () => {
         throw new Error('expected the upload to fail')
@@ -596,14 +598,64 @@ describe('incremental tag invariant', () => {
     expect(client.files()[0].tags).toContainEqual({ name: 'GIT-HASH', value: 'abc123def' })
   })
 
-  it('leaves the non-incremental cache keyed the way it always was', async () => {
+  it('keys every upload by content and type, outside incremental mode too', async () => {
     write('index.html', '<html>index</html>')
 
-    const cache: TransactionCache = {}
-    const result = await uploadFolder(stubClient().client, folder, { cache })
+    const result = await uploadFolder(stubClient().client, folder, { cache: {} })
 
-    // Bare SHA-256 keys, so an existing .ario-deploy cache keeps working for
-    // anyone who never passes --incremental.
-    expect(Object.keys(result.updatedCache ?? {}).every((k) => /^[\da-f]{64}$/.test(k))).toBe(true)
+    expect(Object.keys(result.updatedCache ?? {})).toEqual([
+      incrementalCacheKey(sha256('<html>index</html>'), 'text/html'),
+    ])
+  })
+})
+
+describe('caches written before 2.0', () => {
+  const legacyId = 'L'.repeat(43)
+
+  it('still reuses a hash-only entry, and records it under the typed key', async () => {
+    write('index.html', '<html>index</html>')
+    const hash = sha256('<html>index</html>')
+    const cache: TransactionCache = {
+      [hash]: { createdAtTimestamp: 1, lastUsedTimestamp: 1, transactionId: legacyId },
+    }
+
+    const { client, files, manifest } = stubClient()
+    const result = await uploadFolder(client, folder, { cache })
+
+    // No re-upload on upgrade: the old entry still answers.
+    expect(files()).toHaveLength(0)
+    expect(manifest().paths['index.html']).toEqual({ id: legacyId })
+    expect(result.updatedCache?.[incrementalCacheKey(hash, 'text/html')]?.transactionId).toBe(
+      legacyId,
+    )
+  })
+
+  it('does not reuse a hash-only entry for an empty file, whose type it cannot know', async () => {
+    write('b.js', '')
+    const cache: TransactionCache = {
+      [sha256('')]: { createdAtTimestamp: 1, lastUsedTimestamp: 1, transactionId: legacyId },
+    }
+
+    const { client, files } = stubClient()
+    await uploadFolder(client, folder, { cache })
+
+    // Uploading it again is the only way to serve it as text/javascript.
+    expect(files()).toHaveLength(1)
+  })
+
+  it('is never consulted in incremental mode, which has only written typed keys', async () => {
+    write('index.html', '<html>index</html>')
+    const cache: TransactionCache = {
+      [sha256('<html>index</html>')]: {
+        createdAtTimestamp: 1,
+        lastUsedTimestamp: 1,
+        transactionId: legacyId,
+      },
+    }
+
+    const { client, files } = stubClient()
+    await uploadFolder(client, folder, { cache, incremental: {} })
+
+    expect(files()).toHaveLength(1)
   })
 })

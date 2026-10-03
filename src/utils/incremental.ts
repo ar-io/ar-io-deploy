@@ -40,6 +40,7 @@ import {
   DEPLOY_VARYING_TAG_NAMES,
   FILE_HASH_TAG,
 } from '../constants/incremental.js'
+import { ARWEAVE_TX_ID_REGEX } from './constants.js'
 
 export type DataItemTag = { name: string; value: string }
 
@@ -52,12 +53,11 @@ export interface FileIdentity {
   hash: string
 }
 
-const ARWEAVE_ID = /^[\w-]{43}$/
 const SHA256 = /^[\da-f]{64}$/
 
 /** A base64url transaction id, as a gateway and a manifest both expect it. */
 export function isArweaveId(value: string | undefined): value is string {
-  return typeof value === 'string' && ARWEAVE_ID.test(value)
+  return typeof value === 'string' && ARWEAVE_TX_ID_REGEX.test(value)
 }
 
 /** A lowercase hex SHA-256, as `hashFile` produces. */
@@ -69,8 +69,8 @@ export function isContentHash(value: string | undefined): value is string {
  * The wallet address a gateway indexes a data item's owner as.
  *
  * Deliberately not `signer.getNativeAddress()`. That returns a base58 public
- * key for Solana, a `0x…` address for Ethereum and Polygon, and a `kyve1…`
- * bech32 address for KYVE, none of which a gateway's `owners` filter matches.
+ * key for Solana and a `0x…` address for Ethereum and Polygon, neither of
+ * which a gateway's `owners` filter matches.
  * The query answers HTTP 200 with an empty edge list, so filtering on the
  * native address would cost a round trip per deploy and reuse nothing, with
  * no error to warn on.
@@ -106,15 +106,13 @@ export function ownerAddressFromPublicKey(publicKey: Buffer | Uint8Array): strin
  */
 export function assertOwnerAddress(owner: string): void {
   // Not isArweaveId(): its type predicate narrows the parameter to never here.
-  if (ARWEAVE_ID.test(owner)) {
+  if (ARWEAVE_TX_ID_REGEX.test(owner)) {
     return
   }
 
   const looksNative = owner.startsWith('0x')
     ? 'an Ethereum-style address'
-    : owner.startsWith('kyve1')
-      ? 'a KYVE bech32 address'
-      : 'a chain-native address or public key'
+    : 'a chain-native address or public key'
 
   throw new Error(
     `Incremental uploads need the 43-character base64url address a gateway indexes an owner ` +

@@ -98,7 +98,9 @@ Ask the user:
 | ethereum          | Hex private key (0x...)      | Needs separate `ARNS_KEY` |
 | solana            | Base58 secret key or id.json | Can also be `ARNS_KEY`    |
 
-**ArNS updates always need a Solana key** — either as `ARNS_KEY` or the same key as `DEPLOY_KEY` when using `--sig-type solana`.
+**ArNS updates always need a Solana key** in `ARNS_KEY` (or `--arns-wallet` / `--arns-private-key`). It is never taken from `DEPLOY_KEY`: to use one Solana wallet for both, set both.
+
+Requires Node.js 20.18 or later.
 
 ### Step 3: Run the deploy
 
@@ -117,7 +119,7 @@ ario-deploy deploy --deploy-folder ./dist --arns-name <NAME> --wallet ./wallet.j
 **With ArNS update (same Solana key for both):**
 
 ```bash
-DEPLOY_KEY=<solana-key> ARNS_KEY=<solana-key> ario-deploy deploy --deploy-folder ./dist --arns-name <NAME>
+DEPLOY_KEY=<solana-key> ARNS_KEY=<solana-key> ario-deploy deploy --deploy-folder ./dist --arns-name <NAME> --sig-type solana
 ```
 
 **With on-demand payment (auto-fund if balance is low):**

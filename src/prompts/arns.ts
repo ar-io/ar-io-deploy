@@ -2,7 +2,12 @@ import { confirm, input, select } from '@inquirer/prompts'
 
 import type { SignerType } from '../types/index.js'
 import { ON_DEMAND_TOKENS, type OnDemandToken } from '../utils/turbo.js'
-import { validateArnsName, validateTokenAmount, validateTtl } from '../utils/validators.js'
+import {
+  validateArnsName,
+  validateTokenAmount,
+  validateTtl,
+  validateUndername,
+} from '../utils/validators.js'
 
 const ON_DEMAND_TOKEN_LABELS: Record<OnDemandToken, string> = {
   ario: 'ARIO (Solana)',
@@ -39,6 +44,7 @@ export async function promptUndername(): Promise<string> {
   return input({
     default: '@',
     message: 'Enter undername (subdomain):',
+    validate: validateUndername,
   })
 }
 
@@ -95,7 +101,7 @@ export async function promptAdvancedOptions(sigType: string): Promise<AdvancedOp
     })
 
     maxTokenAmount = await input({
-      message: 'Most the top-up may spend, in whole tokens:',
+      message: 'Maximum the top-up may spend, in whole tokens:',
       validate: validateTokenAmount,
     })
   }

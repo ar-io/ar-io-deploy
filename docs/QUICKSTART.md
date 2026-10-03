@@ -1,6 +1,6 @@
 # Quick Start Guide
 
-Get up and running with ARIO Deploy in minutes!
+Get up and running with ARIO Deploy in minutes. Requires Node.js 20.18 or later.
 
 ## Installation
 
@@ -12,55 +12,49 @@ pnpm add -D @ar.io/deploy
 
 ## Setup
 
-1. **Prepare your wallet**
+A deploy uses up to two keys:
 
-   For plain uploads you can use any supported signer:
-   - **Arweave (default):** base64-encode your JWK
+- **Upload key (`DEPLOY_KEY`)** pays for the upload, on any supported chain:
+  - **Arweave (default):** base64-encode your JWK: `base64 -i wallet.json`
+  - **Ethereum/Polygon:** your raw hex private key, with `--sig-type ethereum` or `--sig-type polygon`
+  - **Solana:** a base58 secret key or a `solana-keygen` `id.json` file, with `--sig-type solana`
+- **ArNS authority key (`ARNS_KEY`)** is needed only to update an ArNS name. It is always a Solana key that controls the name: a base58 secret key, or `--arns-wallet ./id.json`.
 
-     ```bash
-     base64 -i wallet.json | pbcopy
-     ```
+The two can be the same Solana wallet; provide each explicitly.
 
-   - **Ethereum/Polygon:** use your raw hex private key directly
-   - **Solana:** use a base58 secret key, or a `solana-keygen` `id.json` wallet file
-
-   > **Updating ArNS requires a Solana signer** (`--sig-type solana`), because ArNS/ANT records live on Solana programs. Use a base58 Solana secret key as your `DEPLOY_KEY` (or pass `--wallet ./id.json`).
-
-2. **Set environment variable**
+1. **Set the keys**
 
    ```bash
-   export DEPLOY_KEY="<your-wallet-or-private-key>"
+   export DEPLOY_KEY="<upload-key>"
+   export ARNS_KEY="<solana-base58-secret-key>"
    ```
 
-3. **Add deployment script to package.json**
+2. **Add a deployment script to package.json**
 
    ```json
    {
      "scripts": {
        "build": "vite build",
-       "deploy": "pnpm build && ario-deploy deploy --arns-name <YOUR_ARNS_NAME> --sig-type solana"
+       "deploy": "pnpm build && ario-deploy deploy --arns-name <YOUR_ARNS_NAME>"
      }
    }
    ```
 
 ## Basic Usage
 
-Deploy to production (updates ArNS — requires a Solana key):
+Deploy and update ArNS (run the script with `pnpm run deploy`: `pnpm deploy` is a built-in pnpm command):
 
 ```bash
-DEPLOY_KEY=<solana-base58-secret-key> pnpm deploy
+pnpm run deploy
 ```
 
-Deploy to staging (undername):
+Deploy to a staging undername:
 
 ```bash
-DEPLOY_KEY=<solana-base58-secret-key> ario-deploy deploy \
-  --arns-name my-app \
-  --sig-type solana \
-  --undername staging
+ario-deploy deploy --arns-name my-app --undername staging
 ```
 
-Upload without updating ArNS (any signer, no Solana required):
+Upload without updating ArNS (no ArNS key needed):
 
 ```bash
 DEPLOY_KEY=$(base64 -i wallet.json) ario-deploy upload --deploy-folder ./dist
@@ -68,45 +62,36 @@ DEPLOY_KEY=$(base64 -i wallet.json) ario-deploy upload --deploy-folder ./dist
 
 ## Common Scenarios
 
-### Deploy a React/Vite App
-
-```json
-{
-  "scripts": {
-    "build": "vite build",
-    "deploy": "pnpm build && ario-deploy deploy --arns-name my-app --sig-type solana"
-  }
-}
-```
-
-### Deploy with Custom Build Folder
+### Deploy with a Custom Build Folder
 
 ```bash
-ario-deploy deploy --arns-name my-app --sig-type solana --deploy-folder ./build
+ario-deploy deploy --arns-name my-app --deploy-folder ./build
 ```
 
-### Deploy Single File
+### Deploy a Single File
 
 ```bash
-ario-deploy deploy --arns-name my-app --sig-type solana --deploy-file ./dist/index.html
+ario-deploy deploy --arns-name my-app --deploy-file ./dist/index.html
+```
+
+### Use One Solana Wallet for Both Keys
+
+```bash
+ario-deploy deploy --arns-name my-app --sig-type solana --wallet ./id.json --arns-wallet ./id.json
 ```
 
 ### Update ArNS on Devnet
 
 ```bash
-ario-deploy deploy --arns-name my-app --sig-type solana --cluster devnet
+ario-deploy deploy --arns-name my-app --cluster devnet
 ```
 
 `--cluster` only selects the Solana cluster for the ArNS update. The upload still goes to production Turbo; add `--dev` to upload and pay through Turbo's development sandbox instead.
 
 ### Upload with an Ethereum Wallet
 
-Non-Solana signers can upload but cannot update ArNS:
-
 ```bash
-DEPLOY_KEY=<eth-private-key> ario-deploy upload \
-  --deploy-folder ./dist \
-  --sig-type ethereum
+DEPLOY_KEY=<eth-private-key> ario-deploy upload --deploy-folder ./dist --sig-type ethereum
 ```
 
 ## GitHub Actions Setup
@@ -132,52 +117,37 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: 'pnpm'
 
       - run: pnpm install
-      - run: pnpm deploy
+      - run: pnpm run deploy
         env:
           DEPLOY_KEY: ${{ secrets.DEPLOY_KEY }}
+          ARNS_KEY: ${{ secrets.ARNS_KEY }}
 ```
+
+Or use the bundled GitHub Action; see the [README](../README.md#github-action).
 
 ## Troubleshooting
 
-**Issue:** "DEPLOY_KEY environment variable not set"
+**"No upload key provided"**: set `DEPLOY_KEY`, or pass `--wallet` or `--private-key`.
 
-**Solution:** Make sure you've exported the DEPLOY_KEY variable or passed it inline:
+**"No ArNS authority key provided"**: set `ARNS_KEY`, or pass `--arns-wallet` or `--arns-private-key`. It must be a Solana key that controls the name.
 
-```bash
-DEPLOY_KEY=<solana-base58-secret-key> ario-deploy deploy --arns-name my-app --sig-type solana
-```
+**"Invalid Solana key"**: the key must be a base58 64-byte secret key (not a public address) or an `id.json` byte array.
 
----
+**"deploy-folder does not exist"**: run the build first, and point `--deploy-folder` at its output.
 
-**Issue:** "ArNS updates require --sig-type solana"
+**"ArNS name [x] does not exist on mainnet"**: check the name, and the cluster (`--cluster mainnet` or `--cluster devnet`). "Could not fetch the ArNS record" instead means the Solana RPC failed; retry, or pass `--rpc-url`.
 
-**Solution:** ArNS records live on Solana — pass `--sig-type solana` and use a Solana wallet/key for any deploy that updates ArNS.
-
----
-
-**Issue:** "deploy-folder does not exist"
-
-**Solution:** Make sure your build step runs before deployment and outputs to the correct folder:
-
-```bash
-pnpm build && ario-deploy deploy --arns-name my-app --sig-type solana --deploy-folder ./dist
-```
-
----
-
-**Issue:** "ArNS name does not exist"
-
-**Solution:** Verify your ArNS name is registered and you're targeting the correct Solana cluster (`--cluster mainnet` or `--cluster devnet`).
+**"Insufficient Turbo credits"**: top up the upload wallet's Turbo credits, or pass `--on-demand` with a token the upload key can pay in (see the README's On-Demand Payment section).
 
 ## Next Steps
 
-- Read the full [README.md](./README.md) for detailed documentation
-- Check [CONTRIBUTING.md](./CONTRIBUTING.md) to contribute
-- See all available options: `ario-deploy deploy --help`
+- Read the full [README](../README.md)
+- Check [CONTRIBUTING.md](../CONTRIBUTING.md) to contribute
+- See all options: `ario-deploy deploy --help`
 
 ## Need Help?
 

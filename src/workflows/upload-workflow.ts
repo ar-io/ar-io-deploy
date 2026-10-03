@@ -1,5 +1,3 @@
-import fs from 'node:fs'
-
 import {
   type TokenTools,
   type TurboAuthenticatedConfiguration,
@@ -25,23 +23,30 @@ import { expandPath } from '../utils/path.js'
 import { createSigner } from '../utils/signer.js'
 import {
   devTokenRpc,
-  fetchFreeUploadLimit,
+  FALLBACK_FREE_ITEM_BYTES,
+  fetchUploadServiceInfo,
   fromBaseUnits,
   fundShortfall,
+  loadPendingTopUp,
   type OnDemandToken,
   type PayerOptions,
+  type PollOptions,
   quoteUploadWinc,
   resolvePaidBy,
   resolveTurboServices,
+  savePendingTopUp,
   spendableWinc,
   toBaseUnits,
+  type TurboServices,
   validateOnDemandToken,
+  waitForFundTransaction,
 } from '../utils/turbo.js'
-import type { UploadClient, UploadCost, UploadSize } from '../utils/upload-types.js'
+import type { UploadClient } from '../utils/upload-types.js'
 import {
+  type FileUploadPlan,
   type FolderUploadPlan,
-  type FolderUploadResult,
   type IncrementalOptions,
+  planFileUpload,
   planFolderUpload,
   uploadFile,
   uploadFolder,
@@ -90,6 +95,8 @@ export interface UploadWorkflowIo {
    * own tooling; tests pass a stand-in so a top-up never leaves the machine.
    */
   tokenTools?: TokenTools
+  /** How long to wait for a top-up to be credited; tests shorten it. */
+  fundingPoll?: PollOptions
 }
 
 /**
@@ -100,7 +107,7 @@ export interface UploadWorkflowIo {
  * are trusted to answer "have I already paid for this file?".
  *
  * The address is derived from the signer's public key rather than taken from
- * `getNativeAddress()`, which returns a chain-native form for four of the five
+ * `getNativeAddress()`, which returns a chain-native form for three of the four
  * supported signer types that no gateway indexes as an owner. See
  * `ownerAddressFromPublicKey`.
  *
@@ -184,11 +191,22 @@ function reRaise(signal: NodeJS.Signals): void {
  */
 export function createCacheWriter(
   maxEntries: number,
-  { raise = reRaise }: { raise?: (signal: NodeJS.Signals) => void } = {},
+  {
+    onWarning,
+    raise = reRaise,
+    scope,
+  }: {
+    /** Told once if the cache cannot be written; the deploy itself carries on. */
+    onWarning?: (message: string) => void
+    raise?: (signal: NodeJS.Signals) => void
+    /** Which network's cache file to write; see `getCachePath`. */
+    scope?: string
+  } = {},
 ): CacheWriter {
   let pending: TransactionCache | undefined
   let lastWrite = 0
   let timer: NodeJS.Timeout | undefined
+  let warned = false
 
   const clear = (): void => {
     if (timer) {
@@ -204,7 +222,22 @@ export function createCacheWriter(
       return
     }
 
-    saveCache(cleanupCache(pending, maxEntries))
+    try {
+      saveCache(cleanupCache(pending, maxEntries), scope)
+    } catch (error) {
+      /*
+       * The uploads are paid for whether or not their ids reach the disk, so
+       * a read-only or full disk must not fail the deploy that bought them.
+       */
+      if (!warned) {
+        warned = true
+        const message = error instanceof Error ? error.message : String(error)
+        onWarning?.(
+          `Could not save the transaction cache (${message}); this run's uploads will not be reused`,
+        )
+      }
+    }
+
     lastWrite = Date.now()
     pending = undefined
   }
@@ -264,17 +297,77 @@ export function createCacheWriter(
 }
 
 export interface UploadWorkflowResult {
-  cost?: UploadCost
-  size?: UploadSize
+  /** Gateway to view the upload on, when the network's is known. */
+  gatewayUrl?: string
   transactionId: string
+}
+
+/** On-demand funding settings, validated. */
+interface Funding {
+  maxTokenAmount: bigint
+  token: OnDemandToken
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+/**
+ * Everything that can be refused without a network call: a funding token the
+ * upload key cannot pay with, a cap that is not an amount, a service URL that
+ * is not a URL. Refused here, before a folder is hashed or a token spent.
+ */
+function validateWorkflowConfig(
+  config: UploadWorkflowConfig,
+): { funding?: Funding; payers: PayerOptions; services: TurboServices } | string {
+  let funding: Funding | undefined
+  const onDemand = config['on-demand']
+  if (onDemand) {
+    const tokenCheck = validateOnDemandToken(config['sig-type'], onDemand)
+    if (tokenCheck !== true) return tokenCheck
+
+    const cap = config['max-token-amount']
+    if (!cap) return '--on-demand needs --max-token-amount, the most the top-up may spend.'
+
+    try {
+      funding = {
+        maxTokenAmount: toBaseUnits(cap, onDemand as OnDemandToken),
+        token: onDemand as OnDemandToken,
+      }
+    } catch (error) {
+      return errorMessage(error)
+    }
+  }
+
+  let services: TurboServices
+  try {
+    services = resolveTurboServices({
+      dev: config.dev,
+      paymentUrl: config['payment-url'],
+      uploadUrl: config.uploader,
+    })
+  } catch (error) {
+    return errorMessage(error)
+  }
+
+  const payers: PayerOptions = {
+    ignoreApprovals: config['ignore-approvals'],
+    paidBy: config['paid-by']
+      ?.split(',')
+      .map((address) => address.trim())
+      .filter(Boolean),
+    useSignerBalanceFirst: config['use-signer-balance-first'],
+  }
+
+  return { funding, payers, services }
 }
 
 /**
  * Sign in to Turbo and upload a file or folder.
  *
- * @param deployKey - Wallet material (base64 JWK or hex private key per sig-type)
- * @param config - Upload paths, dedupe, bundler service URL, on-demand payment
- * @param io - Error handler (must exit the process)
+ * @param deployKey - Wallet material (base64 JWK, hex key, or base58 Solana key per sig-type)
+ * @param config - Upload paths, dedupe, Turbo services, payment options
+ * @param io - Error handler (must throw) and, for tests, the chain a top-up is paid on
  * @returns Transaction ID or folder manifest ID
  */
 export async function runUploadWorkflow(
@@ -284,53 +377,20 @@ export async function runUploadWorkflow(
 ): Promise<UploadWorkflowResult> {
   const spinner = ora()
 
-  /*
-   * Everything that can be refused without a network call is refused here,
-   * before hashing a folder: a top-up token the key cannot pay with, or a
-   * cap that is not a number.
-   */
-  const onDemandToken = config['on-demand'] as OnDemandToken | undefined
-  let maxTokenAmount: bigint | undefined
-  if (onDemandToken) {
-    const tokenCheck = validateOnDemandToken(config['sig-type'], onDemandToken)
-    if (tokenCheck !== true) {
-      io.error(tokenCheck)
-    }
-
-    if (!config['max-token-amount']) {
-      io.error('--on-demand needs --max-token-amount, the most the top-up may spend.')
-    }
-
-    try {
-      maxTokenAmount = toBaseUnits(config['max-token-amount'], onDemandToken)
-    } catch (error) {
-      io.error(error instanceof Error ? error.message : String(error))
-    }
+  const validated = validateWorkflowConfig(config)
+  if (typeof validated === 'string') {
+    io.error(validated)
   }
 
-  const payerOptions: PayerOptions = {
-    ignoreApprovals: config['ignore-approvals'],
-    paidBy: config['paid-by']
-      ?.split(',')
-      .map((address) => address.trim())
-      .filter(Boolean),
-    useSignerBalanceFirst: config['use-signer-balance-first'],
-  }
+  const { funding, payers, services } = validated
 
   spinner.start('Creating signer')
   const { signer, token: signerToken } = createSigner(config['sig-type'] as SignerType, deployKey)
   spinner.succeed(`Signer created (${chalk.cyan(config['sig-type'])})`)
 
-  const services = resolveTurboServices({
-    dev: config.dev,
-    paymentUrl: config['payment-url'],
-    uploadUrl: config.uploader,
-  })
   for (const warning of services.warnings) {
     spinner.warn(warning)
   }
-
-  spinner.start('Initializing Turbo')
 
   /*
    * Turbo pays a top-up in the client's own token, so with --on-demand the
@@ -340,15 +400,13 @@ export async function runUploadWorkflow(
   const turboFactoryArgs: TurboAuthenticatedConfiguration = {
     paymentServiceConfig: { url: services.paymentUrl },
     signer,
-    token: onDemandToken ?? signerToken,
+    token: funding?.token ?? signerToken,
     uploadServiceConfig: { url: services.uploadUrl },
-    ...(onDemandToken && services.development && { gatewayUrl: devTokenRpc(onDemandToken) }),
+    ...(funding && services.development && { gatewayUrl: devTokenRpc(funding.token) }),
     ...(io.tokenTools && { tokenTools: io.tokenTools }),
   }
-
   const turbo = TurboFactory.authenticated(turboFactoryArgs)
   const uploadClient: UploadClient = turbo as UploadClient
-
   spinner.succeed(
     `Turbo initialized${services.development ? ` (${chalk.yellow('development sandbox')})` : ''}`,
   )
@@ -372,27 +430,60 @@ export async function runUploadWorkflow(
   }
 
   const compression = parseCompressionConfig(config.compress, config['compress-exclude'])
-  const useCache = config['dedupe-cache-max-entries'] > 0
+  const maxEntries = config['dedupe-cache-max-entries']
+  const useCache = maxEntries > 0
+  const scope = services.cacheScope
+
+  /** Persist the cache without letting a disk problem fail a paid-for deploy. */
+  const persistCache = (cache: TransactionCache | undefined): void => {
+    if (!cache || !useCache) return
+    try {
+      saveCache(cleanupCache(cache, maxEntries), scope)
+    } catch (error) {
+      warn(
+        `Could not save the transaction cache (${errorMessage(error)}); this run's uploads will not be reused`,
+      )
+    }
+  }
 
   /*
-   * Plan a folder upload up front: hash every file, skip what the dedupe
-   * cache (and, with --incremental, this wallet's past uploads on chain)
-   * already holds, share uploads between identical files and compress. The
-   * credit check then prices what will actually be sent, not the whole
-   * folder -- pricing the folder demanded a full-site balance for a one-page
-   * change -- and the upload reuses the plan instead of redoing the work.
+   * Plan before paying: hash every file, skip what the dedupe cache (and, with
+   * --incremental, this wallet's past uploads on chain) already holds, share
+   * uploads between identical files, compress. The credit check then prices
+   * what will actually be sent, and the upload reuses the plan.
    */
-  const incrementalFolder = Boolean(config.incremental) && !config['deploy-file']
-  const writer = incrementalFolder
-    ? createCacheWriter(config['dedupe-cache-max-entries'])
-    : undefined
+  const deployFile = config['deploy-file']
+  const writer =
+    useCache && !deployFile ? createCacheWriter(maxEntries, { onWarning: warn, scope }) : undefined
 
-  let incremental: IncrementalOptions | undefined
+  let filePlan: FileUploadPlan | undefined
   let folderPlan: FolderUploadPlan | undefined
+  let incremental: IncrementalOptions | undefined
+  let planError: string | undefined
 
-  if (!config['deploy-file']) {
-    try {
-      if (writer) {
+  try {
+    if (deployFile) {
+      startPhase(`Planning upload of ${chalk.yellow(deployFile)}`)
+      if (config.incremental) {
+        /*
+         * Incremental reuse is a folder-level idea: it is the manifest that
+         * lets unchanged files keep their existing ids. A single file has no
+         * manifest, so say so rather than appearing to honour the flag.
+         */
+        warn('--incremental applies to folder uploads; ignoring it for --deploy-file')
+      }
+
+      filePlan = await planFileUpload(expandPath(deployFile), {
+        cache: useCache ? loadCache(scope) : undefined,
+        compression,
+      })
+      spinner.succeed(
+        filePlan.cached
+          ? `Upload planned: file already uploaded (${chalk.green(filePlan.cached.transactionId)})`
+          : `Upload planned: ${formatBytes(filePlan.uploadBytes)}${compression && filePlan.encoding ? ` after ${filePlan.encoding}` : ''}`,
+      )
+    } else {
+      if (config.incremental && writer) {
         incremental = {
           index: await createIncrementalIndex(uploadClient, config, warn),
           onCacheUpdate: writer.record,
@@ -406,209 +497,236 @@ export async function runUploadWorkflow(
           : 'Planning upload',
       )
       folderPlan = await planFolderUpload(expandPath(config['deploy-folder']), {
-        cache: useCache ? loadCache() : {},
+        cache: useCache ? loadCache(scope) : undefined,
         compression,
         fallbackFile: config['fallback-file'],
         incremental,
       })
-      phase = ''
-    } catch (planError) {
-      writer?.dispose()
-      spinner.fail('Failed to plan upload')
-      const errorMessage = planError instanceof Error ? planError.message : String(planError)
-      io.error(`Failed to plan upload: ${errorMessage}`)
-    }
 
-    const { cacheHits, duplicates, files, recovered, uploadBytes } = folderPlan
-    const toUpload = files.length - cacheHits - duplicates
-    const recoveredMsg = incremental ? ` (${recovered} found on chain)` : ''
-    spinner.succeed(
-      `Upload planned: ${toUpload} of ${files.length} files to upload (${formatBytes(uploadBytes)}` +
-        `${compression ? ` after ${compression.encoding}` : ''}), ${cacheHits} cached${recoveredMsg}, ` +
-        `${duplicates} duplicates`,
-    )
+      const { cacheHits, duplicates, files, recovered, uploadBytes } = folderPlan
+      const toUpload = files.length - cacheHits - duplicates
+      const recoveredMsg = incremental ? ` (${recovered} found on chain)` : ''
+      spinner.succeed(
+        `Upload planned: ${toUpload} of ${files.length} files to upload (${formatBytes(uploadBytes)}` +
+          `${compression ? ` after ${compression.encoding}` : ''}), ${cacheHits} cached${recoveredMsg}, ` +
+          `${duplicates} duplicates`,
+      )
+    }
+  } catch (error) {
+    spinner.fail('Failed to plan upload')
+    planError = `Failed to plan upload: ${errorMessage(error)}`
+  }
+
+  phase = ''
+  if (planError || (!filePlan && !folderPlan)) {
+    writer?.dispose()
+    io.error(planError ?? 'Failed to plan upload')
   }
 
   /*
    * Price exactly what will be sent, decide who pays, and make sure they can.
-   * Turbo bills per data item, so the plan's items are priced one by one
-   * against the upload service's own free limit. A shortfall is either
-   * refused or, with --on-demand, bought in a single top-up for the whole
-   * plan before the first upload.
+   * Turbo bills per data item against the upload service's free limit and the
+   * wallet's metered free tier. A shortfall is refused or, with --on-demand,
+   * bought in a single top-up before the first upload.
    */
-  let { paidBy } = payerOptions
-  startPhase('Checking Turbo credits')
+  let { paidBy } = payers
+  const itemBytes = folderPlan
+    ? [
+        ...folderPlan.files.filter((file) => file.uploadBytes > 0).map((file) => file.uploadBytes),
+        folderPlan.manifestBytes,
+      ]
+    : filePlan && !filePlan.cached
+      ? [filePlan.uploadBytes]
+      : []
 
-  /** Why the upload cannot go ahead, or undefined when it can. */
+  const serviceInfo = await fetchUploadServiceInfo(services.uploadUrl)
+
   const ensureCredits = async (): Promise<string | undefined> => {
+    /*
+     * A top-up an earlier run sent but never saw credited. Buying again before
+     * it lands would pay twice for the same shortfall.
+     */
+    const pending = loadPendingTopUp(scope)
+    if (pending) {
+      startPhase(`Checking the earlier top-up ${chalk.gray(pending.txId)}`)
+      const pendingClient = TurboFactory.unauthenticated({
+        paymentServiceConfig: { url: services.paymentUrl },
+        token: pending.token,
+      })
+      try {
+        const status = await waitForFundTransaction(pendingClient, pending.txId, {
+          timeoutMs: 30_000,
+          ...io.fundingPoll,
+        })
+        if (status === 'pending') {
+          spinner.fail('Earlier top-up not credited yet')
+          return (
+            `A top-up sent by an earlier run (${pending.txId}, ${pending.token}) has not been credited yet. ` +
+            'Re-run once it confirms; delete .ario-deploy/pending-topup*.json only if you are sure it never will.'
+          )
+        }
+
+        spinner.succeed(`Earlier top-up ${chalk.gray(pending.txId)} credited`)
+      } catch (error) {
+        warn(`Earlier top-up ${pending.txId} will not be credited: ${errorMessage(error)}`)
+      }
+
+      savePendingTopUp(undefined, scope)
+    }
+
+    if (itemBytes.length === 0) {
+      spinner.succeed('Turbo credits check passed (nothing to upload)')
+      return undefined
+    }
+
+    startPhase('Checking Turbo credits')
     let requiredWinc: bigint
-    let availableWinc: bigint
+    let availableWinc: bigint | undefined
     try {
-      const itemBytes = folderPlan
-        ? [
-            ...folderPlan.files
-              .filter((file) => file.uploadBytes > 0)
-              .map((file) => file.uploadBytes),
-            folderPlan.manifestBytes,
-          ]
-        : [fs.statSync(expandPath(config['deploy-file']!)).size]
-
-      const freeLimit = await fetchFreeUploadLimit(services.uploadUrl)
-      if (freeLimit === undefined) {
-        warn(`${services.uploadUrl} did not report its free upload limit; pricing every item`)
+      const maxItemBytes = serviceInfo.freeUploadLimitBytes
+      if (maxItemBytes === undefined) {
+        warn(
+          `${services.uploadUrl} did not report its free upload limit; assuming ${formatBytes(FALLBACK_FREE_ITEM_BYTES)}`,
+        )
       }
 
-      requiredWinc = await quoteUploadWinc(turbo, itemBytes, freeLimit ?? 0)
-      if (requiredWinc === 0n) {
-        spinner.succeed('Turbo credits check passed (within the free upload limit)')
-        return undefined
+      let bytesRemaining: bigint | null = null
+      try {
+        const free = await turbo.getFreeStatus()
+        bytesRemaining = free.bytesRemaining === null ? null : BigInt(free.bytesRemaining)
+      } catch (error) {
+        warn(
+          `Could not read this wallet's free-tier allowance (${errorMessage(error)}); assuming it is available`,
+        )
       }
 
+      requiredWinc = await quoteUploadWinc(turbo, itemBytes, {
+        bytesRemaining,
+        maxItemBytes: maxItemBytes ?? FALLBACK_FREE_ITEM_BYTES,
+      })
+    } catch (error) {
+      spinner.fail('Failed to check Turbo credits')
+      return `Failed to check Turbo credits: ${errorMessage(error)}`
+    }
+
+    /*
+     * Who pays is resolved even for a free upload: the free tier is decided
+     * per item at upload time, and an item it does not cover is charged to
+     * the payers named on it, or to nobody but the signer.
+     */
+    try {
       const balance = await turbo.getBalance()
       paidBy = resolvePaidBy(
-        payerOptions,
+        payers,
         balance.receivedApprovals ?? [],
         await turbo.signer.getNativeAddress(),
       )
-      availableWinc = spendableWinc(balance, payerOptions)
+      availableWinc = spendableWinc(balance, payers)
     } catch (error) {
-      spinner.fail('Failed to check Turbo credits')
-      return `Failed to check Turbo credits: ${error instanceof Error ? error.message : String(error)}`
+      if (requiredWinc > 0n) {
+        spinner.fail('Failed to check Turbo credits')
+        return `Failed to check Turbo credits: ${errorMessage(error)}`
+      }
+
+      warn(
+        `Could not read the Turbo balance (${errorMessage(error)}); uploading within the free tier`,
+      )
     }
 
     const payerNote = paidBy ? ` (shared credits from ${paidBy.join(', ')})` : ''
-    if (requiredWinc <= availableWinc) {
+    if (requiredWinc === 0n) {
+      spinner.succeed(`Turbo credits check passed (within the free tier)${payerNote}`)
+      return undefined
+    }
+
+    if (availableWinc !== undefined && requiredWinc <= availableWinc) {
       spinner.succeed(`Turbo credits check passed${payerNote}`)
       return undefined
     }
 
-    if (!onDemandToken || maxTokenAmount === undefined) {
+    const available = availableWinc ?? 0n
+    if (!funding) {
       spinner.fail('Insufficient Turbo credits')
       return [
         'Insufficient Turbo credits for this upload.',
-        `Required: ${requiredWinc} winc, available: ${availableWinc} winc${payerNote}.`,
+        `Required: ${requiredWinc} winc, available: ${available} winc${payerNote}.`,
         '',
         'Top up your Turbo balance (or re-run with --on-demand and --max-token-amount).',
       ].join(' ')
     }
 
-    startPhase(`Topping up Turbo credits with ${chalk.cyan(onDemandToken)}`)
+    startPhase(`Topping up Turbo credits with ${chalk.cyan(funding.token)}`)
     try {
-      const funding = await fundShortfall(turbo, {
-        maxTokenAmount,
-        shortfallWinc: requiredWinc - availableWinc,
-        token: onDemandToken,
+      const result = await fundShortfall(turbo, {
+        ...io.fundingPoll,
+        maxTokenAmount: funding.maxTokenAmount,
+        onSent: (txId) =>
+          savePendingTopUp(
+            { createdAt: new Date().toISOString(), token: funding.token, txId },
+            scope,
+          ),
+        shortfallWinc: requiredWinc - available,
+        token: funding.token,
       })
-      const spent = `${fromBaseUnits(funding.tokenAmount, onDemandToken)} ${onDemandToken}`
-      if (funding.confirmed) {
-        spinner.succeed(`Topped up with ${spent} (${chalk.gray(funding.txId)})`)
-      } else {
-        spinner.warn(
-          `Top-up of ${spent} (${funding.txId}) is not confirmed yet; uploading anyway, which fails if the credits have not landed`,
-        )
+      const spent = `${fromBaseUnits(result.tokenAmount, funding.token)} ${funding.token}`
+      if (result.confirmed) {
+        savePendingTopUp(undefined, scope)
+        spinner.succeed(`Topped up with ${spent} (${chalk.gray(result.txId)})`)
+        return undefined
       }
-    } catch (error) {
-      spinner.fail('On-demand top-up failed')
-      return `On-demand top-up failed: ${error instanceof Error ? error.message : String(error)}`
-    }
 
-    return undefined
+      spinner.fail('Top-up not credited yet')
+      return (
+        `Sent ${spent} (${result.txId}), but Turbo has not credited it yet. ` +
+        'Re-run in a few minutes: the next run waits for this top-up instead of buying another.'
+      )
+    } catch (error) {
+      savePendingTopUp(undefined, scope)
+      spinner.fail('On-demand top-up failed')
+      return `On-demand top-up failed: ${errorMessage(error)}`
+    }
   }
 
   const creditProblem = await ensureCredits()
   phase = ''
   if (creditProblem) {
-    // io.error throws, so nothing after it runs.
     writer?.dispose()
     io.error(creditProblem)
   }
 
-  let txOrManifestId: string
-  let cost: UploadCost | undefined
-  let size: UploadSize | undefined
-  try {
-    if (config['deploy-file']) {
-      const filePath = expandPath(config['deploy-file'])
-      spinner.start(`Uploading file ${chalk.yellow(config['deploy-file'])}`)
+  let transactionId: string | undefined
+  let uploadError: string | undefined
 
-      if (config.incremental) {
-        /*
-         * Incremental reuse is a folder-level idea: it is the manifest that
-         * lets unchanged files keep their existing ids. A single file has no
-         * manifest, so say so rather than appearing to honour the flag.
-         */
-        spinner.warn('--incremental applies to folder uploads; ignoring it for --deploy-file')
-        spinner.start(`Uploading file ${chalk.yellow(config['deploy-file'])}`)
-      }
-
-      let cache = useCache ? loadCache() : {}
-      const uploadResult = await uploadFile(uploadClient, filePath, {
-        cache,
+  if (filePlan) {
+    startPhase(`Uploading file ${chalk.yellow(deployFile)}`)
+    try {
+      const result = await uploadFile(uploadClient, filePlan, { paidBy })
+      transactionId = result.transactionId
+      persistCache(result.updatedCache)
+      spinner.succeed(
+        result.cacheHit
+          ? `File cache hit - reusing transaction ${chalk.green(transactionId)}`
+          : `File uploaded: ${chalk.green(transactionId)}${useCache ? chalk.gray(' (cached for future uploads)') : ''}`,
+      )
+    } catch (error) {
+      spinner.fail('Upload failed')
+      uploadError = `Upload failed: ${errorMessage(error)}`
+    }
+  } else if (folderPlan) {
+    startPhase(`Uploading folder ${chalk.yellow(config['deploy-folder'])}`)
+    try {
+      const result = await uploadFolder(uploadClient, expandPath(config['deploy-folder']), {
         compression,
+        fallbackFile: config['fallback-file'],
+        incremental,
+        onCacheUpdate: writer?.record,
         paidBy,
+        plan: folderPlan,
       })
+      transactionId = result.transactionId
+      if (result.updatedCache) writer?.record(result.updatedCache)
 
-      if (!uploadResult.transactionId) {
-        spinner.fail('File upload failed: no transaction ID returned')
-        io.error('File upload failed: no transaction ID returned')
-      }
-
-      txOrManifestId = uploadResult.transactionId
-      cost = uploadResult.cost
-      size = uploadResult.size
-
-      if (uploadResult.updatedCache && config['dedupe-cache-max-entries'] > 0) {
-        cache = cleanupCache(uploadResult.updatedCache, config['dedupe-cache-max-entries'])
-        saveCache(cache)
-      }
-
-      if (uploadResult.cacheHit) {
-        spinner.succeed(`File cache hit - reusing transaction ${chalk.green(txOrManifestId)}`)
-      } else {
-        const cacheMsg =
-          config['dedupe-cache-max-entries'] > 0 ? chalk.gray('(cached for future uploads)') : ''
-        spinner.succeed(`File uploaded: ${chalk.green(txOrManifestId)} ${cacheMsg}`.trim())
-      }
-    } else {
-      const folderPath = expandPath(config['deploy-folder'])
-
-      startPhase(`Uploading folder ${chalk.yellow(config['deploy-folder'])}`)
-
-      let uploadResult: FolderUploadResult
-      try {
-        uploadResult = await uploadFolder(uploadClient, folderPath, {
-          compression,
-          fallbackFile: config['fallback-file'],
-          incremental,
-          paidBy,
-          plan: folderPlan,
-          throwOnFailure: true,
-        })
-      } finally {
-        /*
-         * Whatever landed before a failure is still paid for, and still ours.
-         * Every upload has settled by now, so nothing can record after this.
-         */
-        writer?.flush()
-        writer?.dispose()
-      }
-
-      phase = ''
-
-      if (!uploadResult.transactionId) {
-        spinner.fail('Folder upload failed: no transaction ID returned')
-        io.error('Folder upload failed: no transaction ID returned')
-      }
-
-      txOrManifestId = uploadResult.transactionId
-      cost = uploadResult.cost
-      size = uploadResult.size
-
-      if (uploadResult.updatedCache && useCache) {
-        saveCache(cleanupCache(uploadResult.updatedCache, config['dedupe-cache-max-entries']))
-      }
-
-      const { cacheHits, duplicates, totalFiles, uploaded } = uploadResult
+      const { cacheHits, duplicates, totalFiles, uploaded } = result
       const sharedMsg = duplicates > 0 ? `, ${duplicates} duplicates shared` : ''
       const statsMsg =
         cacheHits > 0 || duplicates > 0
@@ -616,26 +734,33 @@ export async function runUploadWorkflow(
               ` (${cacheHits}/${totalFiles} files cached${sharedMsg}, ${uploaded} uploaded)`,
             )
           : ''
-
-      if (uploadResult.cacheHit) {
-        spinner.succeed(`All ${totalFiles} files cached - manifest: ${chalk.green(txOrManifestId)}`)
-      } else {
-        const cacheMsg =
-          config['dedupe-cache-max-entries'] > 0
-            ? chalk.gray(' (files cached for future uploads)')
-            : ''
-        spinner.succeed(`Folder uploaded: ${chalk.green(txOrManifestId)}${statsMsg}${cacheMsg}`)
-      }
+      spinner.succeed(
+        result.cacheHit
+          ? `All ${totalFiles} files cached - manifest: ${chalk.green(transactionId)}`
+          : `Folder uploaded: ${chalk.green(transactionId)}${statsMsg}${useCache ? chalk.gray(' (files cached for future uploads)') : ''}`,
+      )
+    } catch (error) {
+      spinner.fail('Upload failed')
+      uploadError =
+        `Upload failed: ${errorMessage(error)}` +
+        (useCache
+          ? '. Files that did upload are cached, so a re-run does not pay for them again.'
+          : '')
+    } finally {
+      // Whatever landed before a failure is paid for; every upload has settled.
+      writer?.flush()
+      writer?.dispose()
     }
-  } catch (uploadError) {
-    spinner.fail('Upload failed')
-    const errorMessage = uploadError instanceof Error ? uploadError.message : String(uploadError)
-    io.error(`Upload failed: ${errorMessage}`)
+  }
+
+  phase = ''
+  if (uploadError || !transactionId) {
+    io.error(uploadError ?? 'Upload failed: no transaction ID returned')
   }
 
   return {
-    cost,
-    size,
-    transactionId: txOrManifestId,
+    gatewayUrl:
+      serviceInfo.gateway ?? (services.development ? undefined : 'https://turbo-gateway.com'),
+    transactionId,
   }
 }

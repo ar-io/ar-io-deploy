@@ -1,139 +1,63 @@
 # Turbo API Test Mocks
 
-This directory contains Mock Service Worker (MSW) handlers for testing Turbo Upload and Payment Services.
+[MSW](https://mswjs.io/) handlers for the Turbo endpoints the CLI reaches through Turbo SDK 2.x. Tests run the real SDK against these, so a change in what the SDK sends is caught here rather than in production.
 
-## Overview
+Every handler answers a route the SDK actually calls; check the SDK source (`node_modules/@ardrive/turbo-sdk/lib/esm/common`) before adding one. A mock for a route the SDK no longer calls lets a test pass while production breaks.
 
-MSW intercepts HTTP requests at the network level, allowing you to test your code with realistic API responses without hitting actual endpoints.
+`tests/setup.ts` loads the defaults for every test and **fails any request no handler answers**, so a test can never reach a live service by accident.
 
-All mock handlers are **fully typed** using TypeScript types generated from the official Turbo OpenAPI specifications.
+<!-- toc -->
 
-## Type Generation
+- [Default handlers](#default-handlers)
+- [Overriding them](#overriding-them)
+- [Types](#types)
 
-Types are automatically generated from OpenAPI specs located in `tests/fixtures/`:
+<!-- tocstop -->
 
-- `upload-service.openapi.yaml` → `tests/types/upload-service.ts`
-- `payment-service.openapi.yaml` → `tests/types/payment-service.ts`
+## Default handlers
 
-**Regenerate types after updating OpenAPI specs:**
+- **Upload service** (`upload.ardrive.io`)
+  - `GET /`: service info, including `freeUploadLimitBytes` and `gateway`
+  - `POST /v1/tx/:token`: a signed data item
+- **Payment service** (`payment.ardrive.io`)
+  - `GET /v1/account/balance/:token`: balance, including `effectiveBalance`
+  - `GET /v1/account/free`: the wallet's remaining free-tier bytes (`null` is unlimited)
+  - `GET /v1/price/bytes/:byteCount`: price of one data item
+  - `GET /v1/price/:token/:amount`: credits for a token amount
+  - `POST /v1/account/balance/:token`: submit a fund transaction (credited)
+- **Gateway** (`turbo-gateway.com`)
+  - `POST /graphql`: past uploads for `--incremental` (none)
+
+## Overriding them
+
+```typescript
+import { http, HttpResponse } from 'msw'
+
+import { mockInsufficientBalance } from '../mocks/turbo-handlers.js'
+import { server } from '../setup.js'
+
+it('refuses an upload the balance cannot cover', async () => {
+  server.use(...mockInsufficientBalance('100', '99999999999'))
+  // ...
+})
+
+it('sees what the bundler received', async () => {
+  server.use(
+    http.post('https://upload.ardrive.io/v1/tx/:token', ({ request }) => {
+      // e.g. request.headers.get('x-paid-by')
+      return HttpResponse.json({ id: 'a'.repeat(43) })
+    }),
+  )
+  // ...
+})
+```
+
+`tests/unit/payments-workflow.test.ts` has a fuller harness (`turboAt`) that mocks a whole upload and payment service pair, production or sandbox, and records the traffic.
+
+## Types
+
+Response types come from the OpenAPI specs in `tests/fixtures/`. After updating a spec, regenerate them:
 
 ```bash
 pnpm generate:types
-```
-
-## Quick Start
-
-The MSW server is automatically configured for all tests via `tests/setup.ts`. Just write your tests normally:
-
-```typescript
-import { describe, expect, it } from 'vitest'
-import { TurboFactory } from '@ardrive/turbo-sdk'
-
-describe('My Upload Test', () => {
-  it('should upload successfully', async () => {
-    // MSW automatically intercepts and mocks Turbo API calls
-    const turbo = TurboFactory.authenticated({ signer, token: 'arweave' })
-    const result = await turbo.uploadFile({ file: './test.txt' })
-
-    expect(result.id).toBe('mock-tx-id-123')
-  })
-})
-```
-
-## Available Handlers
-
-### Default Handlers
-
-All default handlers are automatically loaded:
-
-- **Upload Service**
-  - `POST /v1/tx` - Upload file/data item
-  - `POST /v1/tx/bundle` - Upload folder/manifest
-  - `POST /v1/price/bytes/:bytes` - Price estimation
-
-- **Payment Service**
-  - `GET /v1/balance` - Get wallet balance
-  - `POST /v1/top-up` - Top up with tokens
-  - `GET /v1/rates/:currency/:amount` - Get fiat rates
-
-### Custom Handlers
-
-Override default behavior for specific tests:
-
-```typescript
-import { server } from '../setup.js'
-import { mockUploadSuccess, mockUploadFailure } from '../mocks/turbo-handlers.js'
-
-it('should handle custom tx id', () => {
-  server.use(mockUploadSuccess('my-custom-tx-id'))
-  // Your test code
-})
-
-it('should handle upload errors', () => {
-  server.use(mockUploadFailure(500, 'Custom error message'))
-  // Your test code
-})
-```
-
-## Helper Functions
-
-### Upload Helpers
-
-- `mockUploadSuccess(txId)` - Mock successful upload with custom TX ID
-- `mockUploadFailure(status, message)` - Mock upload failure
-
-### Payment Helpers
-
-- `mockInsufficientBalance(winc)` - Mock low balance scenario
-- `mockOnDemandFundingSuccess(winc)` - Mock successful on-demand top-up
-
-### Example: Testing On-Demand Funding
-
-```typescript
-import { mockInsufficientBalance, mockOnDemandFundingSuccess } from '../mocks/turbo-handlers.js'
-import { server } from '../setup.js'
-
-it('should top up when balance is low', async () => {
-  // Setup: wallet has low balance
-  server.use(mockInsufficientBalance('100'), mockOnDemandFundingSuccess('1000000000000'))
-
-  // Your upload code that triggers on-demand funding
-  const result = await uploadWithOnDemandFunding()
-
-  expect(result.success).toBe(true)
-})
-```
-
-## Mock Data
-
-Access mock data generators for custom responses:
-
-```typescript
-import { mockTurboData } from '../mocks/turbo-handlers.js'
-
-const customUpload = mockTurboData.uploadResponse('my-id')
-const customBalance = mockTurboData.balanceResponse('5000000000')
-```
-
-## Best Practices
-
-1. **Reset handlers after each test** - Done automatically via `server.resetHandlers()` in `afterEach`
-2. **Use specific mocks per test** - Override only what you need with `server.use()`
-3. **Test both success and failure** - Use helper functions to simulate errors
-4. **Isolate tests** - Don't rely on state from other tests
-
-## Debugging
-
-If you need to see which requests are being intercepted:
-
-```typescript
-server.listen({ onUnhandledRequest: 'error' }) // Fail on unmocked requests
-```
-
-Or log all requests:
-
-```typescript
-server.events.on('request:start', ({ request }) => {
-  console.log('MSW intercepted:', request.method, request.url)
-})
 ```

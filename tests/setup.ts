@@ -10,13 +10,8 @@ import { turboHandlers } from './mocks/turbo-handlers.js'
 const VERBOSE_LOGGING = process.env.MSW_VERBOSE === 'true'
 
 /**
- * MSW Server for mocking HTTP requests in tests
- * Configured to intercept requests to:
- * - Turbo Upload Service (upload.ardrive.io)
- * - Turbo Payment Service (payment.ardrive.io)
- * - AO Compute Unit (cu.ardrive.io)
- * - AO Message Unit (mu.ao-testnet.xyz)
- * - Arweave GraphQL (turbo-gateway.com/graphql)
+ * MSW Server for mocking HTTP requests in tests. Intercepts the Turbo upload
+ * and payment services and the GraphQL gateway; see mocks/turbo-handlers.ts.
  */
 export const server = setupServer(...turboHandlers)
 
@@ -32,7 +27,9 @@ beforeAll(() => {
         return
       }
 
-      print.warning()
+      // Fail rather than warn: an unmocked request would reach the real
+      // network, so a test could pass or fail on a live service's mood.
+      print.error()
     },
   })
 

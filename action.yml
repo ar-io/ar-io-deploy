@@ -7,7 +7,7 @@ branding:
 
 inputs:
   deploy-key:
-    description: 'Upload key (pays for the upload): Arweave JWK wallet (base64-encoded or JSON string), or raw private key for Ethereum/Polygon/KYVE/Solana signers'
+    description: 'Upload key (pays for the upload): Arweave JWK wallet (base64-encoded or JSON string), or raw private key for Ethereum/Polygon signers, or a base58 secret key for Solana'
     required: true
   arns-key:
     description: 'ArNS authority key: base58-encoded Solana secret key that controls the ArNS name and signs the record update. Separate from the upload key.'
@@ -25,6 +25,9 @@ inputs:
     default: './dist'
   deploy-file:
     description: 'Path to a single file to deploy (alternative to deploy-folder)'
+    required: false
+  fallback-file:
+    description: 'Path, relative to deploy-folder, served for routes the manifest does not list (e.g. index.html for a single-page app). Defaults to 404.html when present.'
     required: false
   ttl-seconds:
     description: 'TTL in seconds for the ANT record (60-86400)'
@@ -69,7 +72,7 @@ inputs:
     description: 'Custom Turbo payment service URL (follows uploader when that is the sandbox)'
     required: false
   preview:
-    description: 'Enable preview mode: auto-generates undername from PR number and posts a comment with the preview URL'
+    description: 'Enable preview mode: auto-generates undername from PR number and posts a comment with the preview URL. Preview undernames are not removed when the PR closes.'
     required: false
     default: 'false'
   auto-undername:
@@ -77,7 +80,7 @@ inputs:
     required: false
     default: 'false'
   github-token:
-    description: 'GitHub token for posting PR comments (required when preview is enabled)'
+    description: 'GitHub token for posting PR comments (required when preview is enabled; needs pull-requests: write)'
     required: false
   no-dedupe:
     description: 'Disable deduplication (do not cache or reuse previous uploads). By default, ario-deploy caches your deployment log to prevent uploading duplicate (unchanged) files.'
@@ -133,344 +136,217 @@ runs:
       shell: bash
       run: npm install -g @ar.io/deploy@^2
 
+    # One cache entry per run, restored by prefix: the newest entry this ref
+    # (or its base branch) can see. Nothing is deleted, so no extra token
+    # permissions are needed and one branch can never wipe another's cache.
+    # The whole directory is kept: per-network caches and any top-up that was
+    # sent but not yet credited live there too.
     - name: Restore transaction cache
       id: cache-restore
-      if: inputs.no-dedupe != 'true'
+      if: inputs.no-dedupe != 'true' && github.event.action != 'closed'
       uses: actions/cache/restore@v5
       with:
-        path: .ario-deploy/transaction-cache.json
-        key: ario-deploy-transaction-cache
+        path: .ario-deploy
+        key: ario-deploy-cache-${{ github.run_id }}-${{ github.run_attempt }}
+        restore-keys: ario-deploy-cache-
 
     - name: Determine undername
       id: undername
+      if: github.event.action != 'closed'
       shell: bash
+      env:
+        UNDERNAME: ${{ inputs.undername }}
+        AUTO_UNDERNAME: ${{ inputs.auto-undername }}
+        PREVIEW: ${{ inputs.preview }}
+        REPO: ${{ github.event.repository.name }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        REF_NAME: ${{ github.ref_name }}
       run: |
-        UNDERNAME="${{ inputs.undername }}"
-        AUTO_UNDERNAME="${{ inputs.auto-undername }}"
-        PREVIEW="${{ inputs.preview }}"
+        # Every value arrives through env, never pasted into the script: a
+        # branch name is attacker-chosen text, and this step runs with secrets.
+        sanitize() {
+          printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | sed -e 's/[^a-z0-9_-]/-/g' -e 's/--*/-/g' -e 's/^[-_]*//' -e 's/-$//'
+        }
 
-        # Preview mode implies auto-undername
         if [[ "$PREVIEW" == "true" ]]; then
           AUTO_UNDERNAME="true"
         fi
 
         if [[ "$AUTO_UNDERNAME" == "true" && "$UNDERNAME" == "@" ]]; then
-          # Get sanitized repository name
-          REPO_NAME=$(echo "${{ github.event.repository.name }}" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9_-]/-/g' | sed 's/--*/-/g' | sed 's/^-//' | sed 's/-$//')
-
-          # Check if this is a pull request
-          if [[ -n "${{ github.event.pull_request.number }}" ]]; then
-            UNDERNAME="${REPO_NAME}-pr-${{ github.event.pull_request.number }}"
+          REPO_NAME=$(sanitize "$REPO")
+          if [[ -n "$PR_NUMBER" ]]; then
+            UNDERNAME="${REPO_NAME}-pr-${PR_NUMBER}"
             echo "Auto-generated undername from PR: $UNDERNAME"
-          elif [[ -n "${{ github.ref_name }}" && "${{ github.ref_name }}" != "main" && "${{ github.ref_name }}" != "master" ]]; then
-            # Sanitize branch name for use as undername
-            BRANCH_NAME=$(echo "${{ github.ref_name }}" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9_-]/-/g' | sed 's/--*/-/g' | sed 's/^-//' | sed 's/-$//')
-            UNDERNAME="${REPO_NAME}-${BRANCH_NAME}"
+          elif [[ -n "$REF_NAME" && "$REF_NAME" != "main" && "$REF_NAME" != "master" ]]; then
+            UNDERNAME="${REPO_NAME}-$(sanitize "$REF_NAME")"
             echo "Auto-generated undername from branch: $UNDERNAME"
           fi
 
-          # Ensure length constraints: < 61 chars and != 43 chars
-          if [[ ${#UNDERNAME} -ge 61 ]]; then
-            # Truncate to 60 characters
-            UNDERNAME="${UNDERNAME:0:60}"
-            echo "Truncated undername to 60 characters: $UNDERNAME"
-          fi
-
-          # Avoid exactly 43 characters (Arweave transaction ID length)
-          if [[ ${#UNDERNAME} -eq 43 ]]; then
-            # Append 'x' to make it 44 characters
-            UNDERNAME="${UNDERNAME}x"
-            echo "Adjusted undername to avoid 43 characters: $UNDERNAME"
+          # The ANT program accepts at most 61 characters.
+          if [[ ${#UNDERNAME} -gt 61 ]]; then
+            UNDERNAME="${UNDERNAME:0:61}"
+            UNDERNAME="${UNDERNAME%-}"
+            echo "Truncated undername to 61 characters: $UNDERNAME"
           fi
         fi
 
-        echo "undername=$UNDERNAME" >> $GITHUB_OUTPUT
+        echo "undername=$UNDERNAME" >> "$GITHUB_OUTPUT"
 
     - name: Deploy to Permaweb
       id: deploy
+      if: github.event.action != 'closed'
       shell: bash
       env:
         DEPLOY_KEY: ${{ inputs.deploy-key }}
         ARNS_KEY: ${{ inputs.arns-key }}
+        NO_COLOR: '1'
+        IN_ARNS_NAME: ${{ inputs.arns-name }}
+        IN_UNDERNAME: ${{ steps.undername.outputs.undername }}
+        IN_TTL: ${{ inputs.ttl-seconds }}
+        IN_SIG_TYPE: ${{ inputs.sig-type }}
+        IN_CLUSTER: ${{ inputs.cluster }}
+        IN_RPC_URL: ${{ inputs.rpc-url }}
+        IN_DEPLOY_FILE: ${{ inputs.deploy-file }}
+        IN_DEPLOY_FOLDER: ${{ inputs.deploy-folder }}
+        IN_FALLBACK_FILE: ${{ inputs.fallback-file }}
+        IN_ON_DEMAND: ${{ inputs.on-demand }}
+        IN_MAX_TOKEN_AMOUNT: ${{ inputs.max-token-amount }}
+        IN_PAID_BY: ${{ inputs.paid-by }}
+        IN_IGNORE_APPROVALS: ${{ inputs.ignore-approvals }}
+        IN_SIGNER_FIRST: ${{ inputs.use-signer-balance-first }}
+        IN_DEV: ${{ inputs.dev }}
+        IN_UPLOADER: ${{ inputs.uploader }}
+        IN_PAYMENT_URL: ${{ inputs.payment-url }}
+        IN_NO_DEDUPE: ${{ inputs.no-dedupe }}
+        IN_CACHE_MAX: ${{ inputs.dedupe-cache-max-entries }}
+        IN_INCREMENTAL: ${{ inputs.incremental }}
+        IN_INCREMENTAL_GATEWAY: ${{ inputs.incremental-gateway }}
+        IN_COMPRESS: ${{ inputs.compress }}
+        IN_COMPRESS_EXCLUDE: ${{ inputs.compress-exclude }}
       run: |
-        # Handle deploy key format (base64 or JSON)
-        if [[ "$DEPLOY_KEY" =~ ^[A-Za-z0-9+/]+=*$ ]]; then
-          # Looks like base64, use as is
-          echo "Deploy key appears to be base64 encoded"
-        elif [[ "$DEPLOY_KEY" =~ ^\{.*\}$ ]]; then
-          # JSON format, encode to base64
-          echo "Deploy key is JSON, encoding to base64"
-          DEPLOY_KEY=$(echo -n "$DEPLOY_KEY" | base64)
+        # An Arweave JWK given as JSON is base64-encoded for the CLI.
+        if [[ "$DEPLOY_KEY" =~ ^\{.*\}$ ]]; then
+          DEPLOY_KEY=$(printf '%s' "$DEPLOY_KEY" | base64 -w0)
         fi
+        export DEPLOY_KEY ARNS_KEY
 
-        # Build command arguments
-        ARGS="--arns-name ${{ inputs.arns-name }}"
-        ARGS="$ARGS --undername ${{ steps.undername.outputs.undername }}"
-        ARGS="$ARGS --ttl-seconds ${{ inputs.ttl-seconds }}"
-        ARGS="$ARGS --sig-type ${{ inputs.sig-type }}"
-        ARGS="$ARGS --cluster ${{ inputs.cluster }}"
-        if [[ -n "${{ inputs.rpc-url }}" ]]; then
-          ARGS="$ARGS --rpc-url ${{ inputs.rpc-url }}"
-        fi
-
-        # Add deploy-folder or deploy-file
-        if [[ -n "${{ inputs.deploy-file }}" ]]; then
-          ARGS="$ARGS --deploy-file ${{ inputs.deploy-file }}"
+        # Arguments as an array: no word splitting, no globbing, no injection.
+        ARGS=(--arns-name "$IN_ARNS_NAME" --undername "$IN_UNDERNAME" --ttl-seconds "$IN_TTL"
+              --sig-type "$IN_SIG_TYPE" --cluster "$IN_CLUSTER")
+        [[ -n "$IN_RPC_URL" ]] && ARGS+=(--rpc-url "$IN_RPC_URL")
+        if [[ -n "$IN_DEPLOY_FILE" ]]; then
+          ARGS+=(--deploy-file "$IN_DEPLOY_FILE")
         else
-          ARGS="$ARGS --deploy-folder ${{ inputs.deploy-folder }}"
+          ARGS+=(--deploy-folder "$IN_DEPLOY_FOLDER")
+        fi
+        [[ -n "$IN_FALLBACK_FILE" ]] && ARGS+=(--fallback-file "$IN_FALLBACK_FILE")
+        if [[ -n "$IN_ON_DEMAND" ]]; then
+          ARGS+=(--on-demand "$IN_ON_DEMAND")
+          [[ -n "$IN_MAX_TOKEN_AMOUNT" ]] && ARGS+=(--max-token-amount "$IN_MAX_TOKEN_AMOUNT")
+        fi
+        [[ -n "$IN_PAID_BY" ]] && ARGS+=(--paid-by "$IN_PAID_BY")
+        [[ "$IN_IGNORE_APPROVALS" == "true" ]] && ARGS+=(--ignore-approvals)
+        [[ "$IN_SIGNER_FIRST" == "true" ]] && ARGS+=(--use-signer-balance-first)
+        [[ "$IN_DEV" == "true" ]] && ARGS+=(--dev)
+        [[ -n "$IN_UPLOADER" ]] && ARGS+=(--uploader "$IN_UPLOADER")
+        [[ -n "$IN_PAYMENT_URL" ]] && ARGS+=(--payment-url "$IN_PAYMENT_URL")
+        if [[ "$IN_NO_DEDUPE" == "true" ]]; then
+          ARGS+=(--no-dedupe)
+        elif [[ -n "$IN_CACHE_MAX" ]]; then
+          ARGS+=(--dedupe-cache-max-entries "$IN_CACHE_MAX")
+        fi
+        # Passed through even alongside no-dedupe, so the CLI refuses the
+        # combination out loud rather than this step silently dropping it.
+        if [[ "$IN_INCREMENTAL" == "true" ]]; then
+          ARGS+=(--incremental)
+          [[ -n "$IN_INCREMENTAL_GATEWAY" ]] && ARGS+=(--incremental-gateway "$IN_INCREMENTAL_GATEWAY")
+        fi
+        if [[ -n "$IN_COMPRESS" && "$IN_COMPRESS" != "none" ]]; then
+          ARGS+=(--compress "$IN_COMPRESS")
+          [[ -n "$IN_COMPRESS_EXCLUDE" ]] && ARGS+=(--compress-exclude "$IN_COMPRESS_EXCLUDE")
         fi
 
-        # Add on-demand payment options if specified
-        if [[ -n "${{ inputs.on-demand }}" ]]; then
-          ARGS="$ARGS --on-demand ${{ inputs.on-demand }}"
-          if [[ -n "${{ inputs.max-token-amount }}" ]]; then
-            ARGS="$ARGS --max-token-amount ${{ inputs.max-token-amount }}"
-          fi
-        fi
-
-        # Who pays: shared credits are used by default
-        if [[ -n "${{ inputs.paid-by }}" ]]; then
-          ARGS="$ARGS --paid-by ${{ inputs.paid-by }}"
-        fi
-        if [[ "${{ inputs.ignore-approvals }}" == "true" ]]; then
-          ARGS="$ARGS --ignore-approvals"
-        fi
-        if [[ "${{ inputs.use-signer-balance-first }}" == "true" ]]; then
-          ARGS="$ARGS --use-signer-balance-first"
-        fi
-
-        # Turbo services: upload and payment are configured together
-        if [[ "${{ inputs.dev }}" == "true" ]]; then
-          ARGS="$ARGS --dev"
-        fi
-        if [[ -n "${{ inputs.uploader }}" ]]; then
-          ARGS="$ARGS --uploader ${{ inputs.uploader }}"
-        fi
-        if [[ -n "${{ inputs.payment-url }}" ]]; then
-          ARGS="$ARGS --payment-url ${{ inputs.payment-url }}"
-        fi
-
-        # Add dedupe options
-        if [[ "${{ inputs.no-dedupe }}" == "true" ]]; then
-          ARGS="$ARGS --no-dedupe"
-        elif [[ -n "${{ inputs.dedupe-cache-max-entries }}" ]]; then
-          ARGS="$ARGS --dedupe-cache-max-entries ${{ inputs.dedupe-cache-max-entries }}"
-        fi
-
-        # Incremental uploads recover ids from the chain, which is what makes a
-        # missing or stale restored cache cheap instead of expensive. Passed
-        # through even alongside no-dedupe, which asks for the opposite, so the
-        # CLI refuses the combination out loud rather than this step dropping
-        # the flag and deploying as if it had never been set.
-        if [[ "${{ inputs.incremental }}" == "true" ]]; then
-          ARGS="$ARGS --incremental"
-          if [[ -n "${{ inputs.incremental-gateway }}" ]]; then
-            ARGS="$ARGS --incremental-gateway ${{ inputs.incremental-gateway }}"
-          fi
-        fi
-
-        # Add compression options
-        if [[ -n "${{ inputs.compress }}" && "${{ inputs.compress }}" != "none" ]]; then
-          ARGS="$ARGS --compress ${{ inputs.compress }}"
-          if [[ -n "${{ inputs.compress-exclude }}" ]]; then
-            ARGS="$ARGS --compress-exclude ${{ inputs.compress-exclude }}"
-          fi
-        fi
-
-        # $ARGS is expanded unquoted below; stop the shell from globbing
-        # --compress-exclude patterns such as llms*.txt against the runner's cwd.
-        set -f
-
-        echo "Running: ario-deploy deploy $ARGS"
-
-        # Run deploy and capture output
-        OUTPUT=$(ario-deploy deploy $ARGS 2>&1) || {
-          echo "Deployment failed"
-          echo "$OUTPUT"
-          exit 1
-        }
-
+        echo "Running: ario-deploy deploy ${ARGS[*]}"
+        set +e
+        OUTPUT=$(ario-deploy deploy "${ARGS[@]}" 2>&1)
+        STATUS=$?
+        set -e
         echo "$OUTPUT"
 
-        # Extract transaction ID from output (look for "Tx ID" in the table)
-        TX_ID=$(echo "$OUTPUT" | grep -oP 'Tx ID\s*│\s*\K[a-zA-Z0-9_-]{43}' || echo "")
-        if [[ -z "$TX_ID" ]]; then
-          # Try alternative patterns
-          TX_ID=$(echo "$OUTPUT" | grep -oE '[a-zA-Z0-9_-]{43}' | head -1 || echo "")
+        # The CLI prints "Tx ID: <id>" as soon as the upload lands, before the
+        # ArNS update, so the id is reported even when that update fails.
+        TX_ID=$(printf '%s\n' "$OUTPUT" | sed -n 's/^Tx ID: \([A-Za-z0-9_-]\{43\}\)$/\1/p' | head -1)
+        echo "tx-id=$TX_ID" >> "$GITHUB_OUTPUT"
+        echo "undername-used=$IN_UNDERNAME" >> "$GITHUB_OUTPUT"
+
+        if [[ "$STATUS" -ne 0 ]]; then
+          echo "::error::Deployment failed (exit $STATUS)"
+          exit "$STATUS"
         fi
 
-        echo "tx-id=$TX_ID" >> $GITHUB_OUTPUT
-        echo "undername-used=${{ steps.undername.outputs.undername }}" >> $GITHUB_OUTPUT
-
-        # Build deployment URL
-        ARNS_NAME="${{ inputs.arns-name }}"
-        UNDERNAME="${{ steps.undername.outputs.undername }}"
-        if [[ "$UNDERNAME" == "@" ]]; then
-          DEPLOYMENT_URL="https://${ARNS_NAME}.ar.io"
+        if [[ "$IN_UNDERNAME" == "@" ]]; then
+          DEPLOYMENT_URL="https://${IN_ARNS_NAME}.ar.io"
         else
-          DEPLOYMENT_URL="https://${UNDERNAME}_${ARNS_NAME}.ar.io"
+          DEPLOYMENT_URL="https://${IN_UNDERNAME}_${IN_ARNS_NAME}.ar.io"
         fi
-
-        echo "deployment-url=$DEPLOYMENT_URL" >> $GITHUB_OUTPUT
+        echo "deployment-url=$DEPLOYMENT_URL" >> "$GITHUB_OUTPUT"
         echo "Deployment URL: $DEPLOYMENT_URL"
 
-    - name: Delete old transaction cache
-      if: inputs.no-dedupe != 'true' && always()
-      shell: bash
-      continue-on-error: true
-      env:
-        GH_TOKEN: ${{ github.token }}
-      run: |
-        # Delete previous cache so we can save an updated one
-        gh cache delete ario-deploy-transaction-cache 2>/dev/null || true
-
     - name: Save transaction cache
-      if: inputs.no-dedupe != 'true' && always()
+      if: inputs.no-dedupe != 'true' && github.event.action != 'closed' && always()
       uses: actions/cache/save@v5
       continue-on-error: true
       with:
-        path: .ario-deploy/transaction-cache.json
-        key: ario-deploy-transaction-cache
+        path: .ario-deploy
+        key: ario-deploy-cache-${{ github.run_id }}-${{ github.run_attempt }}
 
     - name: Comment on PR
-      if: inputs.preview == 'true' && github.event_name == 'pull_request'
+      if: inputs.preview == 'true' && github.event_name == 'pull_request' && github.event.action != 'closed'
       uses: actions/github-script@v7
+      env:
+        DEPLOYMENT_URL: ${{ steps.deploy.outputs.deployment-url }}
+        TX_ID: ${{ steps.deploy.outputs.tx-id }}
+        UNDERNAME: ${{ steps.deploy.outputs.undername-used }}
+        ARNS_NAME: ${{ inputs.arns-name }}
       with:
         github-token: ${{ inputs.github-token }}
         script: |
-          const deploymentUrl = '${{ steps.deploy.outputs.deployment-url }}';
-          const txId = '${{ steps.deploy.outputs.tx-id }}';
-          const undername = '${{ steps.deploy.outputs.undername-used }}';
-          const arnsName = '${{ inputs.arns-name }}';
+          const { DEPLOYMENT_URL, TX_ID, UNDERNAME, ARNS_NAME } = process.env
 
           const body = `## Permaweb Preview Deployed
 
-          Your preview is available at: **${deploymentUrl}**
+          Your preview is available at: **${DEPLOYMENT_URL}**
 
           | Property | Value |
           |----------|-------|
-          | Transaction ID | \`${txId}\` |
-          | ArNS Name | ${arnsName} |
-          | Undername | ${undername} |
+          | Transaction ID | \`${TX_ID}\` |
+          | ArNS Name | ${ARNS_NAME} |
+          | Undername | ${UNDERNAME} |
 
           > This preview will be available permanently on Arweave via the [AR.IO Network](https://ar.io).`;
 
-          // Find existing comment
           const { data: comments } = await github.rest.issues.listComments({
             owner: context.repo.owner,
             repo: context.repo.repo,
             issue_number: context.issue.number,
           });
 
-          const botComment = comments.find(comment =>
-            comment.body.includes('Permaweb Preview Deployed')
+          const botComment = comments.find((comment) =>
+            comment.body.includes('Permaweb Preview Deployed'),
           );
 
           if (botComment) {
-            // Update existing comment
             await github.rest.issues.updateComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
               comment_id: botComment.id,
-              body: body
+              body,
             });
           } else {
-            // Create new comment
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
-              body: body
+              body,
             });
           }
-
-    - name: Delete undername on PR close
-      if: github.event_name == 'pull_request' && github.event.action == 'closed' && steps.undername.outputs.undername != '@' && (inputs.auto-undername == 'true' || inputs.preview == 'true')
-      shell: bash
-      env:
-        DEPLOY_KEY: ${{ inputs.deploy-key }}
-      run: |
-        UNDERNAME="${{ steps.undername.outputs.undername }}"
-
-        # Safety check: never delete the @ undername (base record)
-        if [[ "$UNDERNAME" == "@" ]]; then
-          echo "Safety check: Cannot delete the base record (@). Skipping deletion."
-          exit 0
-        fi
-
-        echo "Deleting undername '$UNDERNAME' for ArNS name '${{ inputs.arns-name }}'..."
-
-        # Handle deploy key format (base64 or JSON)
-        if [[ "$DEPLOY_KEY" =~ ^[A-Za-z0-9+/]+=*$ ]]; then
-          # Already base64, use as is
-          echo "Deploy key is already base64 encoded"
-        elif [[ "$DEPLOY_KEY" =~ ^\{.*\}$ ]]; then
-          # JSON format, encode to base64
-          echo "Deploy key is JSON, encoding to base64"
-          DEPLOY_KEY=$(echo -n "$DEPLOY_KEY" | base64)
-        fi
-
-        # Get the ANT process ID for the ArNS name
-        echo "Getting ArNS record to find ANT process ID..."
-        PROCESS_ID=$(ar.io get-arns-record --name "${{ inputs.arns-name }}" --json | jq -r '.processId' 2>/dev/null) || {
-          echo "Warning: Failed to get ArNS record. The record may not exist."
-          exit 0
-        }
-
-        if [[ -z "$PROCESS_ID" || "$PROCESS_ID" == "null" ]]; then
-          echo "Warning: No process ID found for ArNS name '${{ inputs.arns-name }}'"
-          exit 0
-        fi
-
-        echo "Found ANT process ID: $PROCESS_ID"
-
-        # Remove the undername from the ANT
-        ar.io remove-ant-record \
-          --process-id "$PROCESS_ID" \
-          --undername "${{ steps.undername.outputs.undername }}" \
-          --private-key "$DEPLOY_KEY" \
-          2>&1 || {
-          echo "Warning: Failed to delete undername. It may have already been deleted or may not exist."
-          # Don't fail the workflow if deletion fails
-        }
-
-    - name: Comment on PR close
-      if: github.event_name == 'pull_request' && github.event.action == 'closed' && inputs.github-token != ''
-      uses: actions/github-script@v7
-      with:
-        github-token: ${{ inputs.github-token }}
-        script: |
-          const undername = '${{ steps.undername.outputs.undername }}';
-          const arnsName = '${{ inputs.arns-name }}';
-          let deploymentUrl;
-
-          if (undername === '@') {
-            deploymentUrl = `https://${arnsName}.ar.io`;
-          } else {
-            deploymentUrl = `https://${undername}_${arnsName}.ar.io`;
-          }
-
-          let body;
-          if (undername !== '@') {
-            body = `## Pull Request Closed
-
-          This PR has been closed. The undername \`${undername}\` has been removed from the ArNS record.
-
-          The deployment remains permanently available on Arweave at its transaction ID.
-
-          > Note: The preview URL (${deploymentUrl}) is no longer accessible as the undername has been deleted.`;
-          } else {
-            body = `## Pull Request Closed
-
-          This PR has been closed. The deployment remains available at:
-          **${deploymentUrl}**
-
-          > Arweave deployments are permanent and will continue to be accessible.`;
-          }
-
-          await github.rest.issues.createComment({
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            issue_number: context.issue.number,
-            body: body
-          });

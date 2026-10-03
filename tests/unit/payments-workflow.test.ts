@@ -51,7 +51,15 @@ interface Traffic {
  */
 function turboAt(
   base: { payment: string; upload: string },
-  options: { balance?: () => Balance; freeLimit?: number; wincPerByte?: number } = {},
+  options: {
+    balance?: () => Balance
+    /** Free-tier bytes the wallet has left; null (the default) is unlimited. */
+    freeBytesRemaining?: null | number
+    freeLimit?: number
+    /** Answer this upload (1-based) with a 402, as the bundler does when unpaid. */
+    rejectUpload?: (n: number) => boolean
+    wincPerByte?: number
+  } = {},
 ): Traffic {
   const traffic: Traffic = { balanceRequests: 0, paidBy: [], priceRequests: [], uploads: 0 }
   const { freeLimit = 107_520, wincPerByte = 10 } = options
@@ -81,6 +89,10 @@ function turboAt(
     ),
     http.post(`${base.upload}/v1/tx/:token`, ({ request }) => {
       traffic.uploads += 1
+      if (options.rejectUpload?.(traffic.uploads)) {
+        return new HttpResponse('Insufficient balance', { status: 402 })
+      }
+
       traffic.paidBy.push(request.headers.get('x-paid-by'))
       return HttpResponse.json({
         dataCaches: [],
@@ -99,6 +111,9 @@ function turboAt(
         winc: String(Number(params.bytes) * wincPerByte),
       })
     }),
+    http.get(`${base.payment}/v1/account/free`, () =>
+      HttpResponse.json({ bytesRemaining: options.freeBytesRemaining ?? null }),
+    ),
     http.get(`${base.payment}/v1/balance`, balanceReply),
     http.get(`${base.payment}/v1/account/balance/:token`, balanceReply),
   )
@@ -190,8 +205,12 @@ function fakeChain(): { transfers: string[] } & TokenTools {
  * Payment endpoints a top-up needs. The balance stays empty until the
  * transfer is credited, as it would on a real chain.
  */
-function fundable(): { credited: () => boolean } {
+function fundable(answer: 'credit' | 'fail' | 'pending' = 'credit'): {
+  credited: () => boolean
+  submits: () => number
+} {
   let credited = false
+  let submits = 0
   server.use(
     http.get(`${PROD.payment}/v1/info`, () =>
       HttpResponse.json({ addresses: { 'base-eth': '0xturbo' } }),
@@ -207,8 +226,18 @@ function fundable(): { credited: () => boolean } {
       }),
     ),
     http.post(`${PROD.payment}/v1/account/balance/:token`, async ({ request }) => {
-      credited = true
+      submits += 1
       const { tx_id: id } = (await request.json()) as { tx_id: string }
+      // The payment service's real answers (addPendingPaymentTx.ts).
+      if (answer === 'fail') {
+        return HttpResponse.json({ failedTransaction: { transactionId: id } }, { status: 400 })
+      }
+
+      if (answer === 'pending') {
+        return HttpResponse.json({ pendingTransaction: { transactionId: id } }, { status: 202 })
+      }
+
+      credited = true
       return HttpResponse.json({
         creditedTransaction: {
           block: 1,
@@ -222,7 +251,7 @@ function fundable(): { credited: () => boolean } {
       })
     }),
   )
-  return { credited: () => credited }
+  return { credited: () => credited, submits: () => submits }
 }
 
 const ethConfig = (overrides: Record<string, unknown> = {}) =>
@@ -370,5 +399,202 @@ describe('on-demand funding', () => {
     ).rejects.toThrow(/not available for arweave upload keys/)
     expect(prod.balanceRequests).toBe(0)
     expect(prod.uploads).toBe(0)
+  })
+})
+
+/** Polling short enough for a test; the real default waits two minutes. */
+const quickPoll = { pollIntervalMs: 1, async sleep() {}, timeoutMs: 50 }
+
+describe('top-ups that do not land', () => {
+  it('stops at once, without uploading, when the payment service rejects the transfer', async () => {
+    writePaidFiles(2)
+    const chain = fakeChain()
+    fundable('fail')
+    const prod = turboAt(PROD, { balance: () => ({ effectiveBalance: '0', winc: '0' }) })
+
+    await expect(
+      runUploadWorkflow(TEST_ETH_PRIVATE_KEY, ethConfig(), {
+        ...io,
+        fundingPoll: quickPoll,
+        tokenTools: chain,
+      }),
+    ).rejects.toThrow(/On-demand top-up failed: .*will not be credited/)
+    expect(prod.uploads).toBe(0)
+  })
+
+  it('does not upload against an uncredited top-up, and a re-run waits for it instead of paying again', async () => {
+    writePaidFiles(2)
+    const chain = fakeChain()
+    const pending = fundable('pending')
+    turboAt(PROD, { balance: () => ({ effectiveBalance: '0', winc: '0' }) })
+    const ioWithChain = { ...io, fundingPoll: quickPoll, tokenTools: chain }
+
+    await expect(runUploadWorkflow(TEST_ETH_PRIVATE_KEY, ethConfig(), ioWithChain)).rejects.toThrow(
+      /has not credited it yet/,
+    )
+    expect(chain.transfers).toHaveLength(1)
+    expect(pending.submits()).toBeGreaterThan(0)
+
+    // The transfer lands; the next run collects it rather than buying again.
+    const landed = fundable('credit')
+    const prod = turboAt(PROD, {
+      balance: () =>
+        landed.credited()
+          ? { effectiveBalance: '1000000000000000', winc: '1000000000000000' }
+          : { effectiveBalance: '0', winc: '0' },
+    })
+
+    await runUploadWorkflow(TEST_ETH_PRIVATE_KEY, ethConfig(), ioWithChain)
+
+    expect(chain.transfers).toHaveLength(1)
+    expect(prod.uploads).toBe(4)
+  })
+})
+
+describe('a single file that is already uploaded', () => {
+  it('is neither priced nor paid for, even with on-demand funding', async () => {
+    fs.writeFileSync(path.join(folder, 'bundle.js'), Buffer.alloc(200_000, 1))
+    const deployFile = path.join(folder, 'bundle.js')
+    const cached = { 'dedupe-cache-max-entries': 1000, 'deploy-file': deployFile }
+
+    // First run uploads it, paid from balance.
+    turboAt(PROD)
+    const first = await runUploadWorkflow(TEST_ETH_PRIVATE_KEY, ethConfig(cached), io)
+
+    // Second run: empty balance and on-demand on. The cache already holds it.
+    const chain = fakeChain()
+    fundable()
+    const prod = turboAt(PROD, { balance: () => ({ effectiveBalance: '0', winc: '0' }) })
+    const second = await runUploadWorkflow(TEST_ETH_PRIVATE_KEY, ethConfig(cached), {
+      ...io,
+      tokenTools: chain,
+    })
+
+    expect(second.transactionId).toBe(first.transactionId)
+    expect(chain.transfers).toEqual([])
+    expect(prod.priceRequests).toEqual([])
+    expect(prod.uploads).toBe(0)
+  })
+})
+
+describe("the wallet's metered free tier", () => {
+  it('prices small files once the free-tier bytes are spent, and tops up for them', async () => {
+    for (let i = 0; i < 3; i++) {
+      fs.writeFileSync(path.join(folder, `small-${i}.txt`), `small file ${i}`)
+    }
+
+    const chain = fakeChain()
+    const funding = fundable()
+    const prod = turboAt(PROD, {
+      balance: () =>
+        funding.credited()
+          ? { effectiveBalance: '1000000000000000', winc: '1000000000000000' }
+          : { effectiveBalance: '0', winc: '0' },
+      freeBytesRemaining: 0,
+    })
+
+    await runUploadWorkflow(TEST_ETH_PRIVATE_KEY, ethConfig(), { ...io, tokenTools: chain })
+
+    // Every item, the manifest included, is priced, and one top-up covers them.
+    expect(prod.priceRequests.length).toBeGreaterThan(0)
+    expect(chain.transfers).toHaveLength(1)
+  })
+
+  it('still names the payers of shared credits when the upload is expected to be free', async () => {
+    const prod = turboAt(PROD, {
+      balance: () => ({
+        effectiveBalance: '100',
+        receivedApprovals: [
+          { approvedWincAmount: '100', payingAddress: 'alice', usedWincAmount: '0' },
+        ],
+        winc: '0',
+      }),
+    })
+
+    await runUploadWorkflow(ARWEAVE_KEY, config(), io)
+
+    // index.html and the manifest are free by size, but the free tier is
+    // decided at upload time; if it does not cover them, alice pays.
+    expect(prod.priceRequests).toEqual([])
+    expect(prod.paidBy).toEqual(['alice', 'alice'])
+  })
+})
+
+describe('partial failure', () => {
+  it('keeps the ids of files that did upload, so a re-run pays only for the rest', async () => {
+    writePaidFiles(3)
+    const cachedConfig = config({ 'dedupe-cache-max-entries': 1000 })
+
+    // The second data item is refused; the others land.
+    turboAt(PROD, { rejectUpload: (n) => n === 2 })
+    await expect(runUploadWorkflow(ARWEAVE_KEY, cachedConfig, io)).rejects.toThrow(
+      /Files that did upload are cached/,
+    )
+
+    const retry = turboAt(PROD)
+    await runUploadWorkflow(ARWEAVE_KEY, cachedConfig, io)
+
+    // Four files (three chunks and index.html) went up the first time, less the
+    // refused one; the re-run sends that one and the manifest.
+    expect(retry.uploads).toBe(2)
+  })
+
+  it('does not fail a paid deploy because the cache cannot be written', async () => {
+    // A file where the cache directory should be makes every write fail.
+    fs.writeFileSync(path.join(workdir, '.ario-deploy'), 'not a directory')
+    const prod = turboAt(PROD)
+
+    const result = await runUploadWorkflow(
+      ARWEAVE_KEY,
+      config({ 'dedupe-cache-max-entries': 1000 }),
+      io,
+    )
+
+    expect(result.transactionId).toMatch(/^tx/)
+    expect(prod.uploads).toBe(2)
+  })
+})
+
+describe('local state is kept per network', () => {
+  it('never reuses a sandbox upload for a production deploy', async () => {
+    const cachedConfig = config({ 'dedupe-cache-max-entries': 1000 })
+
+    const dev = turboAt(DEV)
+    await runUploadWorkflow(ARWEAVE_KEY, { ...cachedConfig, dev: true }, io)
+    expect(dev.uploads).toBe(2)
+
+    const prod = turboAt(PROD)
+    await runUploadWorkflow(ARWEAVE_KEY, cachedConfig, io)
+
+    // index.html is uploaded again: the sandbox id would not resolve on mainnet gateways.
+    expect(prod.uploads).toBe(2)
+  })
+})
+
+describe('service URLs', () => {
+  it('refuses an --uploader that is not a URL before touching the network', async () => {
+    const prod = turboAt(PROD)
+
+    await expect(
+      runUploadWorkflow(ARWEAVE_KEY, config({ uploader: 'upload.ardrive.io' }), io),
+    ).rejects.toThrow(/--uploader must be an http\(s\) URL/)
+    expect(prod.uploads).toBe(0)
+  })
+
+  it('strips a trailing slash, which Turbo would turn into a //v1 path that 404s', async () => {
+    writePaidFiles(1)
+    const prod = turboAt(PROD, { freeLimit: 0 })
+
+    await runUploadWorkflow(
+      ARWEAVE_KEY,
+      config({
+        'payment-url': 'https://payment.ardrive.io/',
+        uploader: 'https://upload.ardrive.io/',
+      }),
+      io,
+    )
+
+    expect(prod.balanceRequests).toBe(1)
+    expect(prod.uploads).toBe(3)
   })
 })

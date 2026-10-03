@@ -1,10 +1,14 @@
 import { Flags } from '@oclif/core'
 
 import { promptArnsName, promptCluster } from '../prompts/arns.js'
-import { promptDeployTarget } from '../prompts/deployment.js'
+import { type DeployTarget, promptDeployTarget } from '../prompts/deployment.js'
 import { promptSignerType } from '../prompts/wallet.js'
 import { CONTENT_ENCODINGS } from '../utils/compression.js'
-import { createFlagConfig, type ResolvedConfig } from '../utils/config-resolver.js'
+import {
+  createFlagConfig,
+  type PromptContext,
+  type ResolvedConfig,
+} from '../utils/config-resolver.js'
 import { TTL_MAX, TTL_MIN } from '../utils/constants.js'
 import { ALL_ON_DEMAND_TOKENS } from '../utils/turbo.js'
 import {
@@ -16,6 +20,17 @@ import {
 } from '../utils/validators.js'
 import { DEFAULT_CACHE_MAX_ENTRIES } from './cache.js'
 import { DEFAULT_INCREMENTAL_GATEWAY } from './incremental.js'
+
+/** Ask "file or folder?" once per run, whichever of the two flags asks first. */
+function deployTarget(context: PromptContext): Promise<DeployTarget> {
+  let target = context.memo.get('deploy-target') as Promise<DeployTarget> | undefined
+  if (!target) {
+    target = promptDeployTarget()
+    context.memo.set('deploy-target', target)
+  }
+
+  return target
+}
 
 /**
  * Global flag definitions - single source of truth for all flags
@@ -29,7 +44,6 @@ export const globalFlags = {
       required: false,
     }),
     prompt: promptArnsName,
-    triggersInteractive: true,
   }),
   arnsPrivateKey: createFlagConfig<string | undefined>({
     flag: Flags.string({
@@ -103,8 +117,9 @@ export const globalFlags = {
       },
       required: false,
     }),
-    async prompt() {
-      const target = await promptDeployTarget()
+    async prompt(context) {
+      if (context.provided.has('deploy-folder')) return
+      const target = await deployTarget(context)
       return target.type === 'file' ? target.path : undefined
     },
   }),
@@ -123,9 +138,10 @@ export const globalFlags = {
       },
       required: false,
     }),
-    async prompt() {
-      const target = await promptDeployTarget()
-      return target.type === 'folder' ? target.path : './dist'
+    async prompt(context) {
+      if (context.provided.has('deploy-file')) return
+      const target = await deployTarget(context)
+      return target.type === 'folder' ? target.path : undefined
     },
   }),
   dev: createFlagConfig<boolean>({
@@ -313,62 +329,6 @@ export const globalFlags = {
       required: false,
     }),
   }),
-}
-
-/**
- * Complete set of flags for the deploy command
- */
-export const deployFlags = {
-  'arns-name': globalFlags.arnsName.flag,
-  'arns-private-key': globalFlags.arnsPrivateKey.flag,
-  'arns-wallet': globalFlags.arnsWallet.flag,
-  cluster: globalFlags.cluster.flag,
-  compress: globalFlags.compress.flag,
-  'compress-exclude': globalFlags.compressExclude.flag,
-  'dedupe-cache-max-entries': globalFlags.dedupeCacheMaxEntries.flag,
-  'deploy-file': globalFlags.deployFile.flag,
-  'deploy-folder': globalFlags.deployFolder.flag,
-  dev: globalFlags.dev.flag,
-  'fallback-file': globalFlags.fallbackFile.flag,
-  'ignore-approvals': globalFlags.ignoreApprovals.flag,
-  incremental: globalFlags.incremental.flag,
-  'incremental-gateway': globalFlags.incrementalGateway.flag,
-  'max-token-amount': globalFlags.maxTokenAmount.flag,
-  'no-dedupe': globalFlags.noDedupe.flag,
-  'on-demand': globalFlags.onDemand.flag,
-  'paid-by': globalFlags.paidBy.flag,
-  'payment-url': globalFlags.paymentUrl.flag,
-  'private-key': globalFlags.privateKey.flag,
-  'rpc-url': globalFlags.rpcUrl.flag,
-  'sig-type': globalFlags.sigType.flag,
-  'ttl-seconds': globalFlags.ttlSeconds.flag,
-  undername: globalFlags.undername.flag,
-  uploader: globalFlags.uploader.flag,
-  'use-arns': globalFlags.useArns.flag,
-  'use-signer-balance-first': globalFlags.useSignerBalanceFirst.flag,
-  wallet: globalFlags.wallet.flag,
-}
-
-/**
- * ArNS-specific flags (subset of deploy flags)
- */
-export const arnsFlags = {
-  'arns-name': globalFlags.arnsName.flag,
-  'arns-private-key': globalFlags.arnsPrivateKey.flag,
-  'arns-wallet': globalFlags.arnsWallet.flag,
-  cluster: globalFlags.cluster.flag,
-  'rpc-url': globalFlags.rpcUrl.flag,
-  'ttl-seconds': globalFlags.ttlSeconds.flag,
-  undername: globalFlags.undername.flag,
-}
-
-/**
- * Wallet/authentication flags (subset of deploy flags)
- */
-export const walletFlags = {
-  'private-key': globalFlags.privateKey.flag,
-  'sig-type': globalFlags.sigType.flag,
-  wallet: globalFlags.wallet.flag,
 }
 
 /**

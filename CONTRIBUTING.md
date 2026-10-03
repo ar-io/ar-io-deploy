@@ -94,28 +94,17 @@ fix(uploader): handle empty manifest paths correctly
 docs: update installation instructions
 ```
 
-### Creating a Changeset
+### Releases
 
-Before submitting your PR, create a changeset to describe your changes:
-
-```bash
-pnpm changeset
-```
-
-This will:
-
-1. Ask you to select the type of change (patch, minor, major)
-2. Prompt you to describe the change
-3. Create a markdown file in `.changeset/` directory
+Releases are cut by semantic-release when a branch merges to `main` (or `alpha` for prereleases). The version comes from the commit messages: `fix:` releases a patch, `feat:` a minor version, and `feat!:` or a `BREAKING CHANGE:` footer a major one. There is nothing to bump or record by hand.
 
 ### Pull Request Process
 
 1. Update documentation if needed
 2. Add tests for new features
 3. Ensure all tests pass
-4. Create a changeset (see above)
-5. Push your branch and create a Pull Request
-6. Wait for review and address any feedback
+4. Push your branch and create a Pull Request
+5. Wait for review and address any feedback
 
 ## Code Style
 

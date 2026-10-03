@@ -66,6 +66,23 @@ describe(
       expect(error?.message).toMatch(/max-token-amount/)
     })
 
+    it('fails, rather than prompting and exiting 0, when upload has no key and no terminal', async () => {
+      const saved = process.env.DEPLOY_KEY
+      delete process.env.DEPLOY_KEY
+      try {
+        const { error } = await runCommand([
+          'upload',
+          '--deploy-folder',
+          './tests/fixtures/test-app',
+        ])
+
+        expect(error?.message).toMatch(/No upload key provided/)
+        expect(error?.oclif?.exit).not.toBe(0)
+      } finally {
+        if (saved !== undefined) process.env.DEPLOY_KEY = saved
+      }
+    })
+
     it('should no longer accept kyve as a signer type', async () => {
       const { error } = await runCommand([
         'deploy',

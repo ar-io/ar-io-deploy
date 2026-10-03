@@ -26,17 +26,5 @@ export interface UploadClient {
 }
 
 export interface UploadClientResult {
-  cost?: UploadCost
   id?: string
-  size?: UploadSize
-}
-
-export interface UploadCost {
-  amount: bigint
-  token: string
-}
-
-export interface UploadSize {
-  payloadBytes: number
-  signedBytes?: number
 }

@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import {
   DATA_ITEM_HEADER_BYTES,
-  fetchFreeUploadLimit,
+  fetchUploadServiceInfo,
   fromBaseUnits,
   fundShortfall,
   quoteUploadWinc,
@@ -185,10 +185,38 @@ describe('spendableWinc', () => {
   })
 })
 
+/** Production's free item limit, with free-tier bytes to spare. */
+const unlimitedFree = { bytesRemaining: null, maxItemBytes: 107_520 }
+
 describe('quoteUploadWinc', () => {
+  it("prices small items once the wallet's free-tier bytes run out", async () => {
+    const client = {
+      getUploadCosts: vi.fn(async ({ bytes }: { bytes: number[] }) =>
+        bytes.map(() => ({ winc: '5' })),
+      ),
+    }
+    // Three 10 KB items; the remaining free bytes cover the first one only.
+    const item = 10_000
+    const bytesRemaining = BigInt(item + DATA_ITEM_HEADER_BYTES)
+    expect(
+      await quoteUploadWinc(client, [item, item, item], { bytesRemaining, maxItemBytes: 107_520 }),
+    ).toBe(10n)
+  })
+
+  it('prices every item when the free tier is spent', async () => {
+    const client = {
+      getUploadCosts: vi.fn(async ({ bytes }: { bytes: number[] }) =>
+        bytes.map(() => ({ winc: '5' })),
+      ),
+    }
+    expect(
+      await quoteUploadWinc(client, [1000, 2000], { bytesRemaining: 0n, maxItemBytes: 107_520 }),
+    ).toBe(10n)
+  })
+
   it('prices nothing when every item is within the free limit', async () => {
     const client = { getUploadCosts: vi.fn() }
-    expect(await quoteUploadWinc(client, [1000, 50_000], 107_520)).toBe(0n)
+    expect(await quoteUploadWinc(client, [1000, 50_000], unlimitedFree)).toBe(0n)
     expect(client.getUploadCosts).not.toHaveBeenCalled()
   })
 
@@ -200,14 +228,14 @@ describe('quoteUploadWinc', () => {
     }
     const big = 200_000
     // The 1 KB item is free; the two 200 KB items are each billed, header included.
-    const total = await quoteUploadWinc(client, [1000, big, big], 107_520)
+    const total = await quoteUploadWinc(client, [1000, big, big], unlimitedFree)
     expect(total).toBe(BigInt((big + DATA_ITEM_HEADER_BYTES) * 10 * 2))
   })
 
   it('counts the data item header against the free limit', async () => {
     const client = { getUploadCosts: vi.fn(async () => [{ winc: '7' }]) }
     // Payload fits, payload plus header does not: Turbo bills the signed item.
-    expect(await quoteUploadWinc(client, [107_000], 107_520)).toBe(7n)
+    expect(await quoteUploadWinc(client, [107_000], unlimitedFree)).toBe(7n)
   })
 
   it('never asks for more than a bounded batch of quotes at once', async () => {
@@ -217,29 +245,34 @@ describe('quoteUploadWinc', () => {
       ),
     }
     const sizes = Array.from({ length: 45 }, (_, i) => 200_000 + i)
-    expect(await quoteUploadWinc(client, sizes, 0)).toBe(45n)
+    expect(await quoteUploadWinc(client, sizes, { bytesRemaining: null, maxItemBytes: 0 })).toBe(
+      45n,
+    )
     for (const [{ bytes }] of client.getUploadCosts.mock.calls) {
       expect(bytes.length).toBeLessThanOrEqual(20)
     }
   })
 })
 
-describe('fetchFreeUploadLimit', () => {
-  it('reads the limit the upload service reports', async () => {
+describe('fetchUploadServiceInfo', () => {
+  it('reads the free limit and gateway the upload service reports', async () => {
     const fetchImpl = vi.fn(async (_url: string | URL | Request) =>
-      Response.json({ freeUploadLimitBytes: 5_242_880 }),
+      Response.json({ freeUploadLimitBytes: 5_242_880, gateway: 'https://ar-io.dev/' }),
     )
-    expect(await fetchFreeUploadLimit('https://upload.example.com/', fetchImpl)).toBe(5_242_880)
+    expect(await fetchUploadServiceInfo('https://upload.example.com/', fetchImpl)).toEqual({
+      freeUploadLimitBytes: 5_242_880,
+      gateway: 'https://ar-io.dev',
+    })
     expect(fetchImpl.mock.calls[0][0]).toBe('https://upload.example.com/')
   })
 
-  it('returns undefined when the service does not say', async () => {
-    expect(await fetchFreeUploadLimit('https://x', async () => Response.json({}))).toBeUndefined()
+  it('returns nothing it was not told, and nothing when offline', async () => {
+    expect(await fetchUploadServiceInfo('https://x', async () => Response.json({}))).toEqual({})
     expect(
-      await fetchFreeUploadLimit('https://x', async () => {
+      await fetchUploadServiceInfo('https://x', async () => {
         throw new Error('offline')
       }),
-    ).toBeUndefined()
+    ).toEqual({})
   })
 })
 

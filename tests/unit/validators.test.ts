@@ -30,8 +30,9 @@ describe('Validator Unit Tests', () => {
     it('should reject invalid ttl values', () => {
       expect(validateTtl('59')).toBe('TTL must be between 60 and 86400 seconds')
       expect(validateTtl('86401')).toBe('TTL must be between 60 and 86400 seconds')
-      expect(validateTtl('abc')).toBe('TTL must be a valid number')
-      expect(validateTtl('-100')).toBe('TTL must be between 60 and 86400 seconds')
+      for (const notWhole of ['abc', '-100', '60abc', '1e3', '90.5']) {
+        expect(validateTtl(notWhole)).toBe('TTL must be a whole number of seconds')
+      }
     })
   })
 

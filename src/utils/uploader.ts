@@ -28,7 +28,7 @@ import {
   incrementalCacheKey,
   isArweaveId,
 } from './incremental.js'
-import type { UploadClient, UploadCost, UploadSize } from './upload-types.js'
+import type { UploadClient } from './upload-types.js'
 
 /**
  * Provenance tags stamped on every uploaded data item. In CI (GitHub Actions)
@@ -104,8 +104,6 @@ export interface IncrementalOptions {
 
 export interface UploadResult {
   cacheHit: boolean
-  cost?: UploadCost
-  size?: UploadSize
   transactionId: string
   updatedCache?: TransactionCache
 }
@@ -119,8 +117,6 @@ export interface FolderUploadResult extends UploadResult {
   totalFiles: number
   /** Number of files that were uploaded */
   uploaded: number
-  /** Bytes sent for those files (after compression), excluding the manifest */
-  uploadedBytes: number
 }
 
 /**
@@ -144,84 +140,166 @@ async function encodeForUpload(
   return { body, size: body.length }
 }
 
-export async function uploadFile(
-  turbo: UploadClient,
+/** SHA-256 of zero bytes, which every empty file shares whatever its type. */
+const EMPTY_FILE_SHA256 = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
+
+/**
+ * Key a file's upload is remembered under: content hash, content type and,
+ * when compressed, encoding. The type is part of the key because identical
+ * bytes served as two types are two different uploads (see
+ * `incrementalCacheKey`).
+ */
+export function fileCacheKey(hash: string, contentType: string, encoding?: string): string {
+  return incrementalCacheKey(hash, contentType, encoding)
+}
+
+/**
+ * Find a reusable upload for a file in the local cache.
+ *
+ * Caches written before 2.0 keyed uploads by hash alone (`<hash>`, or
+ * `<encoding>:<hash>`). Outside incremental mode those entries are still
+ * honoured, so upgrading does not re-upload a whole site; the typed key is
+ * then written alongside. The one exception is the empty file: its hash is
+ * shared by every empty file of every type, so a hash-only entry for it says
+ * nothing about which Content-Type was uploaded.
+ *
+ * @returns The id and the cache with the entry touched (and migrated), or
+ *   undefined on a miss.
+ */
+function lookupCachedUpload(
+  cache: TransactionCache,
+  file: { cacheKey: string; encoding?: string; hash: string },
+  allowLegacy: boolean,
+): { cache: TransactionCache; transactionId: string } | undefined {
+  const typed = getCachedTransaction(cache, file.cacheKey)
+  if (typed && isArweaveId(typed.transactionId)) {
+    return { cache: touchCacheEntry(cache, file.cacheKey), transactionId: typed.transactionId }
+  }
+
+  if (!allowLegacy || file.hash === EMPTY_FILE_SHA256) {
+    return undefined
+  }
+
+  const legacyKey = file.encoding ? `${file.encoding}:${file.hash}` : file.hash
+  const legacy = getCachedTransaction(cache, legacyKey)
+  if (legacy && isArweaveId(legacy.transactionId)) {
+    return {
+      cache: setCachedTransaction(cache, file.cacheKey, legacy.transactionId),
+      transactionId: legacy.transactionId,
+    }
+  }
+
+  return undefined
+}
+
+/** Everything decided about a single-file upload before it is paid for. */
+export interface FileUploadPlan {
+  /** Compressed bytes to upload, when compression applies. */
+  body?: Buffer
+  /** The cache, touched or migrated on a hit. Undefined when caching is off. */
+  cache?: TransactionCache
+  cacheKey: string
+  /** Set when the file is already on Arweave and nothing will be uploaded. */
+  cached?: { transactionId: string }
+  contentType: string
+  encoding?: ContentEncoding
+  fullPath: string
+  /** Bytes the upload will send: 0 on a cache hit. */
+  uploadBytes: number
+}
+
+/**
+ * Work out what uploading one file will send, without uploading: hash it,
+ * check the cache, and compress it if it will be sent. Pricing this plan, not
+ * the file on disk, means a cached file is never paid for again.
+ */
+export async function planFileUpload(
   filePath: string,
-  options?: {
-    cache?: TransactionCache
-    compression?: CompressionConfig
-    /** Payers for every data item: credit-share approvals the bundler may spend. */
-    paidBy?: string[]
-  },
-): Promise<UploadResult> {
-  const mimeType = mime.lookup(filePath) || 'application/octet-stream'
+  options?: { cache?: TransactionCache; compression?: CompressionConfig },
+): Promise<FileUploadPlan> {
+  const contentType = mime.lookup(filePath) || 'application/octet-stream'
   const encoding =
     options?.compression && shouldCompress(path.basename(filePath), options.compression)
       ? options.compression.encoding
       : undefined
 
-  // Compute hash if cache is provided; compressed uploads get their own key
-  const rawHash = options?.cache ? await hashFile(filePath) : undefined
-  const fileHash = rawHash && encoding ? `${encoding}:${rawHash}` : rawHash
+  if (!options?.cache) {
+    const { body, size } = await encodeForUpload(filePath, encoding)
+    return { body, cacheKey: '', contentType, encoding, fullPath: filePath, uploadBytes: size }
+  }
 
-  // Check cache for hit
-  if (fileHash && options?.cache) {
-    const cached = getCachedTransaction(options.cache, fileHash)
-    if (cached) {
-      const updatedCache = touchCacheEntry(options.cache, fileHash)
-      return {
-        cacheHit: true,
-        transactionId: cached.transactionId,
-        updatedCache,
-      }
+  const hash = await hashFile(filePath)
+  const cacheKey = fileCacheKey(hash, contentType, encoding)
+  const hit = lookupCachedUpload(options.cache, { cacheKey, encoding, hash }, true)
+  if (hit) {
+    return {
+      cache: hit.cache,
+      cacheKey,
+      cached: { transactionId: hit.transactionId },
+      contentType,
+      encoding,
+      fullPath: filePath,
+      uploadBytes: 0,
     }
   }
 
-  const { body } = await encodeForUpload(filePath, encoding)
+  const { body, size } = await encodeForUpload(filePath, encoding)
+  return {
+    body,
+    cache: options.cache,
+    cacheKey,
+    contentType,
+    encoding,
+    fullPath: filePath,
+    uploadBytes: size,
+  }
+}
 
-  // Upload file
+/**
+ * Upload one file from its plan, or reuse the cached upload the plan found.
+ *
+ * @param turbo - Upload client.
+ * @param plan - From `planFileUpload`.
+ * @param options - Payers for the data item.
+ */
+export async function uploadFile(
+  turbo: UploadClient,
+  plan: FileUploadPlan,
+  options?: {
+    /** Payers for the data item: credit-share approvals the bundler may spend. */
+    paidBy?: string[]
+  },
+): Promise<UploadResult> {
+  if (plan.cached) {
+    return { cacheHit: true, transactionId: plan.cached.transactionId, updatedCache: plan.cache }
+  }
+
+  const { body } = plan
   const uploadResult = await turbo.uploadFile({
     dataItemOpts: {
       tags: [
         ...provenanceTags(),
-        {
-          name: 'anchor',
-          value: new Date().toISOString(),
-        },
-        {
-          name: 'Content-Type',
-          value: mimeType,
-        },
-        ...(encoding ? [{ name: 'Content-Encoding', value: encoding }] : []),
+        { name: 'Content-Type', value: plan.contentType },
+        ...(plan.encoding ? [{ name: 'Content-Encoding', value: plan.encoding }] : []),
       ],
       ...(options?.paidBy && { paidBy: options.paidBy }),
     },
     ...(body
       ? { fileSizeFactory: () => body.length, fileStreamFactory: () => Readable.from(body) }
-      : { file: filePath }),
+      : { file: plan.fullPath }),
   })
 
   if (!uploadResult?.id) {
     throw new Error('Failed to upload file: upload result missing transaction ID')
   }
 
-  // Store in cache if provided
-  if (fileHash && options?.cache) {
-    const updatedCache = setCachedTransaction(options.cache, fileHash, uploadResult.id)
-    return {
-      cacheHit: false,
-      cost: uploadResult.cost,
-      size: uploadResult.size,
-      transactionId: uploadResult.id,
-      updatedCache,
-    }
-  }
-
   return {
     cacheHit: false,
-    cost: uploadResult.cost,
-    size: uploadResult.size,
     transactionId: uploadResult.id,
+    updatedCache:
+      plan.cache && plan.cacheKey
+        ? setCachedTransaction(plan.cache, plan.cacheKey, uploadResult.id)
+        : undefined,
   }
 }
 
@@ -335,13 +413,7 @@ export async function planFolderUpload(
       const encoding =
         compression && shouldCompress(relativePath, compression) ? compression.encoding : undefined
       const hash = useCache ? await hashFile(fullPath) : ''
-      const cacheKey = hash
-        ? incremental
-          ? incrementalCacheKey(hash, contentType, encoding)
-          : encoding
-            ? `${encoding}:${hash}`
-            : hash
-        : ''
+      const cacheKey = hash ? fileCacheKey(hash, contentType, encoding) : ''
       return { cacheKey, contentType, encoding, fullPath, hash, relativePath, uploadBytes: 0 }
     }),
   )
@@ -353,10 +425,11 @@ export async function planFolderUpload(
   if (cache) {
     for (const file of files) {
       if (!file.cacheKey) continue
-      const cached = getCachedTransaction(cache, file.cacheKey)
-      if (cached) {
-        file.cached = { transactionId: cached.transactionId }
-        cache = touchCacheEntry(cache, file.cacheKey)
+      // Incremental mode has only ever written typed keys; see lookupCachedUpload.
+      const hit = lookupCachedUpload(cache, file, !incremental)
+      if (hit) {
+        file.cached = { transactionId: hit.transactionId }
+        cache = hit.cache
         cacheHits++
       }
     }
@@ -514,9 +587,13 @@ export async function uploadFolder(
      * carries whatever the chain lookup recovered. Omitted, a plan is made here.
      */
     plan?: FolderUploadPlan
+    /**
+     * Called with the updated cache the moment each file lands, in every mode,
+     * so a run that fails or is interrupted part-way keeps the ids it paid for.
+     */
+    onCacheUpdate?: (cache: TransactionCache) => void
     /** Payers for every data item: credit-share approvals the bundler may spend. */
     paidBy?: string[]
-    throwOnFailure?: boolean
   },
 ): Promise<FolderUploadResult> {
   const concurrency = options?.concurrency ?? DEFAULT_UPLOAD_CONCURRENCY
@@ -553,15 +630,19 @@ export async function uploadFolder(
 
   /*
    * allSettled, not all: `Promise.all` rejects on the first failure while the
-   * other workers are still in flight, so their `onCacheUpdate` calls would
-   * land after the caller has already flushed and given up -- ids paid for and
-   * thrown away. Everything settles first, then the failure propagates. The
-   * same uploads are attempted either way, so the bill is unchanged; a
-   * systemic failure is just reported once the queue drains.
+   * other workers are still in flight, and their ids would land after the
+   * caller had given up -- paid for and thrown away. In-flight uploads settle
+   * and are recorded; uploads that have not started yet are skipped, so an
+   * outage costs one round of retries, not one per remaining file.
    */
+  const recordCache = options?.onCacheUpdate ?? incremental?.onCacheUpdate
+  let failed = false
+  const uploadedIds = new Map<string, string>()
   const settled = await Promise.allSettled(
     toUpload.map((file) =>
       limit(async () => {
+        if (failed) return
+
         const tags = incremental
           ? incrementalFileTags(file.hash, file.contentType, file.encoding)
           : [
@@ -571,34 +652,33 @@ export async function uploadFolder(
             ]
         const { body } = file
 
-        const uploadResult = await turbo.uploadFile({
-          dataItemOpts: { tags, ...(options?.paidBy && { paidBy: options.paidBy }) },
-          ...(body
-            ? { fileSizeFactory: () => body.length, fileStreamFactory: () => Readable.from(body) }
-            : { file: file.fullPath }),
-        })
+        try {
+          const uploadResult = await turbo.uploadFile({
+            dataItemOpts: { tags, ...(options?.paidBy && { paidBy: options.paidBy }) },
+            ...(body
+              ? { fileSizeFactory: () => body.length, fileStreamFactory: () => Readable.from(body) }
+              : { file: file.fullPath }),
+          })
 
-        if (!uploadResult?.id) {
-          if (options?.throwOnFailure) {
-            throw new Error(`Failed to upload file: ${file.relativePath}`)
+          if (!uploadResult?.id) {
+            throw new Error('upload result missing transaction ID')
           }
 
-          return { file, transactionId: null }
+          /*
+           * Record the id before anything else can fail. Assignment and read
+           * are not separated by an await, so the concurrent workers cannot
+           * lose each other's writes.
+           */
+          uploadedIds.set(file.relativePath, uploadResult.id)
+          if (useCache && file.cacheKey) {
+            cache = setCachedTransaction(cache, file.cacheKey, uploadResult.id)
+            recordCache?.(cache)
+          }
+        } catch (error) {
+          failed = true
+          const message = error instanceof Error ? error.message : String(error)
+          throw new Error(`Failed to upload ${file.relativePath}: ${message}`, { cause: error })
         }
-
-        /*
-         * Record the id before anything else can fail. A deploy killed
-         * part-way through is the normal case, not the exceptional one, and an
-         * upload that is paid for but forgotten is money burnt. Assignment and
-         * read are not separated by an await, so the concurrent workers cannot
-         * lose each other's writes.
-         */
-        if (incremental && file.cacheKey) {
-          cache = setCachedTransaction(cache, file.cacheKey, uploadResult.id)
-          incremental.onCacheUpdate?.(cache)
-        }
-
-        return { file, transactionId: uploadResult.id }
       }),
     ),
   )
@@ -606,29 +686,6 @@ export async function uploadFolder(
   const rejection = settled.find((outcome) => outcome.status === 'rejected')
   if (rejection?.status === 'rejected') {
     throw rejection.reason
-  }
-
-  const uploadResults = settled.flatMap((outcome) =>
-    outcome.status === 'fulfilled' ? [outcome.value] : [],
-  )
-
-  // Update cache with all successful uploads (done sequentially to avoid race conditions)
-  const uploadedIds = new Map<string, string>()
-  for (const result of uploadResults) {
-    if (!result.transactionId) continue
-
-    uploadedIds.set(result.file.relativePath, result.transactionId)
-    if (!incremental && useCache && result.file.cacheKey) {
-      cache = setCachedTransaction(cache, result.file.cacheKey, result.transactionId)
-    }
-  }
-
-  // Check for any failed uploads
-  const failedUploads = uploadResults.filter((r) => r.transactionId === null)
-  if (failedUploads.length > 0 && options?.throwOnFailure) {
-    throw new Error(
-      `Failed to upload ${failedUploads.length} file(s): ${failedUploads.map((f) => f.file.relativePath).join(', ')}`,
-    )
   }
 
   // Build manifest paths from cached, shared and newly uploaded files
@@ -702,8 +759,7 @@ export async function uploadFolder(
     totalFiles: files.length,
     transactionId: manifestUploadResult.id,
     updatedCache: useCache ? cache : undefined,
-    uploaded: toUpload.length - failedUploads.length,
-    uploadedBytes: plan.uploadBytes,
+    uploaded: toUpload.length,
   }
 }
 

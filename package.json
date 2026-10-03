@@ -10,11 +10,11 @@
   },
   "scripts": {
     "clean:install": "rm -rf node_modules pnpm-lock.yaml || true && pnpm store prune && pnpm install",
-    "build": "vite build && tsc --emitDeclarationOnly",
+    "build": "vite build && tsc -p tsconfig.build.json --emitDeclarationOnly",
     "dev": "./bin/dev.js",
     "test": "vitest",
     "test:run": "vitest run",
-    "test:unit": "vitest run src",
+    "test:unit": "vitest run src tests/unit",
     "test:e2e": "vitest run tests/e2e",
     "test:coverage": "vitest run --coverage",
     "lint": "eslint . --ext .ts",
@@ -23,7 +23,7 @@
     "format:check": "prettier --check .",
     "docs:update": "markdown-toc-gen insert README.md --max-depth 2",
     "generate:types": "openapi-typescript tests/fixtures/upload-service.openapi.yaml -o tests/types/upload-service.ts && openapi-typescript tests/fixtures/payment-service.openapi.yaml -o tests/types/payment-service.ts",
-    "prepare": "husky install",
+    "prepare": "husky",
     "release": "semantic-release"
   },
   "oclif": {
@@ -42,13 +42,11 @@
   },
   "files": [
     "dist",
-    "bin",
-    "oclif.manifest.json"
+    "bin"
   ],
   "dependencies": {
     "@ar.io/sdk": "4.0.2-alpha.4",
     "@ardrive/turbo-sdk": "^2.1.0",
-    "@dha-team/arbundles": "^1.0.4",
     "@inquirer/prompts": "^7.2.0",
     "@oclif/core": "^4.0.30",
     "@solana/kit": "^6.9.0",
@@ -60,7 +58,6 @@
   "devDependencies": {
     "@commitlint/cli": "^19.6.0",
     "@commitlint/config-conventional": "^19.6.0",
-    "@oclif/prettier-config": "^0.2.1",
     "@oclif/test": "^4.1.14",
     "@semantic-release/npm": "^13.1.1",
     "@types/mime-types": "^2.1.4",
@@ -86,8 +83,6 @@
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
     "vite": "^6.0.5",
-    "vite-plugin-dts": "^4.3.0",
-    "vite-tsconfig-paths": "^5.1.4",
     "vitest": "^2.1.8"
   },
   "publishConfig": {
@@ -95,7 +90,7 @@
     "registry": "https://registry.npmjs.org/"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=20.18.0"
   },
   "repository": {
     "type": "git",

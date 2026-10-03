@@ -1,3 +1,4 @@
+/** An Arweave transaction or data item id: 43 base64url characters. */
 export const ARWEAVE_TX_ID_REGEX = /^[\w-]{43}$/
 
 export const TTL_MIN = 60
