@@ -121,6 +121,50 @@ describe('the ArNS update is checked before the upload is paid for', () => {
   })
 })
 
+describe('who controls the name', () => {
+  it('refuses a key that neither owns nor controls the name, before uploading', async () => {
+    const key = solanaKey()
+    sdk.getOwner.mockResolvedValue(solanaKey().address)
+
+    const { error } = await deploy(key.secret)
+
+    expect(error?.message).toContain(`The ArNS key ${key.address} is neither the owner`)
+    expect(error?.message).toContain('Nothing was uploaded')
+    expect(uploads).toBe(0)
+    expect(sdk.setBaseNameRecord).not.toHaveBeenCalled()
+  })
+
+  it('accepts a controller that is not the owner', async () => {
+    const key = solanaKey()
+    sdk.getOwner.mockResolvedValue(solanaKey().address)
+    sdk.getControllers.mockResolvedValue([key.address])
+
+    const { error } = await deploy(key.secret)
+
+    expect(error).toBeUndefined()
+    expect(sdk.setBaseNameRecord).toHaveBeenCalled()
+  })
+
+  it('goes ahead with --skip-arns-check, for a name that changed hands very recently', async () => {
+    sdk.getOwner.mockResolvedValue(solanaKey().address)
+
+    const { error } = await deploy(solanaKey().secret, ['--skip-arns-check'])
+
+    expect(error).toBeUndefined()
+    expect(uploads).toBeGreaterThan(0)
+    expect(sdk.setBaseNameRecord).toHaveBeenCalled()
+  })
+
+  it('does not refuse when the ANT cannot be read, leaving the update as the check', async () => {
+    sdk.getOwner.mockRejectedValue(new Error('429 Too Many Requests'))
+
+    const { error } = await deploy(solanaKey().secret)
+
+    expect(error).toBeUndefined()
+    expect(sdk.setBaseNameRecord).toHaveBeenCalled()
+  })
+})
+
 describe('after the upload', () => {
   it('points the record at the manifest', async () => {
     const key = solanaKey()

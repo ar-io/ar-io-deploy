@@ -235,11 +235,10 @@ describe.skipIf(!WALLET || !ARNS_NAME)('ArNS updates on devnet', () => {
     },
   )
 
-  it('warns before uploading with a key that does not control the name, and names the tx id when refused', async () => {
+  it('refuses, before uploading, a key that does not control the name', async () => {
     const stranger = newSolanaWallet()
     const strangerAddress = await addressOf(stranger)
-
-    const run = cli([
+    const args = [
       'deploy',
       '--dev',
       '--cluster',
@@ -256,10 +255,16 @@ describe.skipIf(!WALLET || !ARNS_NAME)('ArNS updates on devnet', () => {
       stranger,
       '--undername',
       'stranger',
-    ])
+    ]
 
-    expect(run.output).toContain(`The ArNS key ${strangerAddress} is neither the owner`)
-    expect(run.status).not.toBe(0)
-    expect(run.output).toContain(`The upload succeeded (Tx ID ${run.txId})`)
+    const refused = cli(args)
+    expect(refused.status).not.toBe(0)
+    expect(refused.output).toContain(`The ArNS key ${strangerAddress} is neither the owner`)
+    expect(refused.txId).toBeUndefined()
+
+    // Forced past the check, the program itself refuses, and the id survives.
+    const forced = cli([...args, '--skip-arns-check'])
+    expect(forced.status).not.toBe(0)
+    expect(forced.output).toContain(`The upload succeeded (Tx ID ${forced.txId})`)
   })
 })

@@ -327,6 +327,7 @@ The free upload limit is read from the upload service, so it follows the network
 - `--fallback-file`: Path, relative to the deploy folder, served for routes the manifest does not list. Defaults to `404.html` when the build emits one. See [Single-page apps](#single-page-apps).
 - `--undername, -u`: ANT undername to update. Default: `@`
 - `--ttl-seconds, -t`: TTL in seconds for the ANT record (60-86400). Default: `60`
+- `--skip-arns-check`: Update the record even if the ArNS key does not appear to own or control the name. Without it, a deploy whose key cannot update the name is refused before anything is uploaded. Use it only right after the name changed hands, when the ANT's recorded owner can lag.
 
 Upload key (pays for the upload):
 

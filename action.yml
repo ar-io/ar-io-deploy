@@ -44,6 +44,10 @@ inputs:
   rpc-url:
     description: 'Optional Solana RPC URL override for ArNS updates'
     required: false
+  skip-arns-check:
+    description: 'Update the ArNS record even if arns-key does not appear to own or control the name (e.g. right after a transfer). Without it, such a deploy fails before uploading.'
+    required: false
+    default: 'false'
   on-demand:
     description: 'Top up Turbo credits with this token if the balance cannot cover the upload. Solana keys: ario, solana, solana-usdc. EVM keys: base-eth, base-usdc. Requires max-token-amount.'
     required: false
@@ -206,6 +210,7 @@ runs:
         IN_SIG_TYPE: ${{ inputs.sig-type }}
         IN_CLUSTER: ${{ inputs.cluster }}
         IN_RPC_URL: ${{ inputs.rpc-url }}
+        IN_SKIP_ARNS_CHECK: ${{ inputs.skip-arns-check }}
         IN_DEPLOY_FILE: ${{ inputs.deploy-file }}
         IN_DEPLOY_FOLDER: ${{ inputs.deploy-folder }}
         IN_FALLBACK_FILE: ${{ inputs.fallback-file }}
@@ -234,6 +239,7 @@ runs:
         ARGS=(--arns-name "$IN_ARNS_NAME" --undername "$IN_UNDERNAME" --ttl-seconds "$IN_TTL"
               --sig-type "$IN_SIG_TYPE" --cluster "$IN_CLUSTER")
         [[ -n "$IN_RPC_URL" ]] && ARGS+=(--rpc-url "$IN_RPC_URL")
+        [[ "$IN_SKIP_ARNS_CHECK" == "true" ]] && ARGS+=(--skip-arns-check)
         if [[ -n "$IN_DEPLOY_FILE" ]]; then
           ARGS+=(--deploy-file "$IN_DEPLOY_FILE")
         else

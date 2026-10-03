@@ -256,25 +256,44 @@ export default class Deploy extends Command {
     spinner.succeed(`ArNS record fetched for ${chalk.green(arnsName)}`)
 
     /*
-     * Owner and controllers come from the ANT's config, whose owner field is
-     * the last owner the program recorded; a fresh transfer can lag it. So a
-     * mismatch is a loud warning rather than a refusal.
+     * A key that controls neither the ANT nor a controller slot is refused
+     * here, before the upload is paid for: the program would refuse the update
+     * afterwards anyway. The owner is the last owner the ANT program recorded,
+     * which a fresh transfer can lag, so --skip-arns-check downgrades the
+     * refusal to a warning. If the ANT cannot be read at all, the check cannot
+     * decide, and the update itself remains the real check.
      */
     const antArgs = {
       processId,
       rpc,
       ...(programIds.antProgramId ? { antProgramId: programIds.antProgramId } : {}),
     }
+    let authority: { controllers: string[]; owner: string } | undefined
     try {
       const reader = new SolanaANTReadable(antArgs)
       const [owner, controllers] = await Promise.all([reader.getOwner(), reader.getControllers()])
-      if (signer.address !== owner && !controllers.includes(signer.address)) {
-        spinner.warn(
-          `The ArNS key ${signer.address} is neither the owner (${owner}) nor a controller of ${arnsName}; the record update will likely be refused after the upload`,
+      authority = { controllers, owner }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      spinner.warn(
+        `Could not read the ANT for ${arnsName} (${message}); not checking who controls it`,
+      )
+    }
+
+    if (
+      authority &&
+      signer.address !== authority.owner &&
+      !authority.controllers.includes(signer.address)
+    ) {
+      const problem = `The ArNS key ${signer.address} is neither the owner (${authority.owner}) nor a controller of ${arnsName}`
+      if (!config['skip-arns-check']) {
+        spinner.fail('ArNS key does not control the name')
+        this.error(
+          `${problem}, so the record update would be refused. Nothing was uploaded. Use the key that owns or controls the name, or pass --skip-arns-check if it changed hands very recently.`,
         )
       }
-    } catch {
-      // Reading the ANT is advisory; the update itself is the real check.
+
+      spinner.warn(`${problem}; continuing because of --skip-arns-check`)
     }
 
     return {

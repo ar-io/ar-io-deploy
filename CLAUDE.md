@@ -86,7 +86,7 @@ Four things are load-bearing and easy to break:
 
 `src/utils/solana.ts` handles Solana key conversion (base58 or id.json array, validated as 64 bytes) and RPC client creation. ArNS updates use `@ar.io/sdk` ANT write operations on Solana mainnet/devnet.
 
-`deploy` checks everything about the ArNS update it can **before** paying for the upload (`prepareArns`): the key decodes, the undername matches the ANT program's rule (`validateUndername`), and the name exists ("record not found" is told apart from an RPC failure). Whether the key controls the name is only a warning: the ANT's recorded owner can lag a transfer. The tx id is printed before the update, and a failed update names it.
+`deploy` checks everything about the ArNS update it can **before** paying for the upload (`prepareArns`): the key decodes, the undername matches the ANT program's rule (`validateUndername`), and the name exists ("record not found" is told apart from an RPC failure). A key that is neither the ANT's owner nor a controller is refused before uploading; `--skip-arns-check` downgrades that to a warning, because the recorded owner can lag a transfer. If the ANT cannot be read, the check warns and the update itself decides. The tx id is printed before the update, and a failed update names it.
 
 ## Testing
 

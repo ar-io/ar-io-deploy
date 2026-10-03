@@ -151,6 +151,7 @@ After successful deployment, report:
 | `--undername, -u`       | Subdomain/undername                                          | `@`                         |
 | `--ttl-seconds, -t`     | TTL for ArNS record                                          | `60`                        |
 | `--cluster, -p`         | Solana cluster                                               | `mainnet`                   |
+| `--skip-arns-check`     | Update ArNS even if the key does not appear to control it    | `false`                     |
 | `--on-demand`           | Top-up token (must match the upload key)                     | —                           |
 | `--max-token-amount`    | Max spend for the whole deploy (required with on-demand)     | —                           |
 | `--paid-by`             | Wallets whose shared credits pay                             | all that shared             |

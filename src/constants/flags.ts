@@ -258,6 +258,14 @@ export const globalFlags = {
     }),
     prompt: promptSignerType,
   }),
+  skipArnsCheck: createFlagConfig<boolean>({
+    flag: Flags.boolean({
+      default: false,
+      description:
+        'Update the ArNS record even if the ArNS key does not appear to own or control the name (e.g. right after a transfer). Without it, such a deploy is refused before uploading.',
+      required: false,
+    }),
+  }),
   ttlSeconds: createFlagConfig<string>({
     flag: Flags.string({
       char: 't',
@@ -359,6 +367,7 @@ export interface DeployConfig {
   'sig-type': string
   'ttl-seconds': string
   undername: string
+  'skip-arns-check': boolean
   'use-arns': boolean
   uploader?: string
   'use-signer-balance-first': boolean
@@ -392,6 +401,7 @@ export const deployFlagConfigs = {
   'private-key': globalFlags.privateKey,
   'rpc-url': globalFlags.rpcUrl,
   'sig-type': globalFlags.sigType,
+  'skip-arns-check': globalFlags.skipArnsCheck,
   'ttl-seconds': globalFlags.ttlSeconds,
   undername: globalFlags.undername,
   uploader: globalFlags.uploader,
