@@ -31,7 +31,7 @@ inputs:
     required: false
     default: '3600'
   sig-type:
-    description: 'Signer type for the upload key that pays for the upload (arweave, ethereum, polygon, kyve, solana).'
+    description: 'Signer type for the upload key that pays for the upload (arweave, ethereum, polygon, solana).'
     required: false
     default: 'arweave'
   cluster:
@@ -42,13 +42,31 @@ inputs:
     description: 'Optional Solana RPC URL override for ArNS updates'
     required: false
   on-demand:
-    description: 'Enable on-demand payment with specified token (ario or base-eth)'
+    description: 'Top up Turbo credits with this token if the balance cannot cover the upload. Solana keys: ario, solana, solana-usdc. EVM keys: base-eth, base-usdc. Requires max-token-amount.'
     required: false
   max-token-amount:
-    description: 'Maximum token amount for on-demand payment (used with on-demand)'
+    description: 'Most the on-demand top-up may spend, in whole tokens (required with on-demand)'
     required: false
+  paid-by:
+    description: 'Comma-separated wallets whose shared credits pay for the upload (defaults to every wallet that shared credits with the upload key)'
+    required: false
+  ignore-approvals:
+    description: "Ignore shared credits; pay only from the upload key's own balance"
+    required: false
+    default: 'false'
+  use-signer-balance-first:
+    description: "Spend the upload key's own balance before shared credits"
+    required: false
+    default: 'false'
+  dev:
+    description: "Use Turbo's development sandbox (upload and payment services together)"
+    required: false
+    default: 'false'
   uploader:
-    description: 'Custom Turbo upload service base URL (defaults to the ArDrive production endpoint).'
+    description: 'Custom Turbo upload service URL (defaults to production; see dev for the sandbox).'
+    required: false
+  payment-url:
+    description: 'Custom Turbo payment service URL (follows uploader when that is the sandbox)'
     required: false
   preview:
     description: 'Enable preview mode: auto-generates undername from PR number and posts a comment with the preview URL'
@@ -108,12 +126,12 @@ runs:
         # and guessing wrong breaks their deploy.
         package-manager-cache: false
 
-    # Pinned to the major this action tag represents. Unpinned, `@v1` would
-    # silently install a future 2.x mid-deploy for every consumer — the exact
+    # Pinned to the major this action tag represents. Unpinned, `@v2` would
+    # silently install a future 3.x mid-deploy for every consumer — the exact
     # thing a major tag is supposed to prevent.
     - name: Install ario-deploy
       shell: bash
-      run: npm install -g @ar.io/deploy@^1
+      run: npm install -g @ar.io/deploy@^2
 
     - name: Restore transaction cache
       id: cache-restore
@@ -210,9 +228,26 @@ runs:
           fi
         fi
 
-        # Add uploader options
+        # Who pays: shared credits are used by default
+        if [[ -n "${{ inputs.paid-by }}" ]]; then
+          ARGS="$ARGS --paid-by ${{ inputs.paid-by }}"
+        fi
+        if [[ "${{ inputs.ignore-approvals }}" == "true" ]]; then
+          ARGS="$ARGS --ignore-approvals"
+        fi
+        if [[ "${{ inputs.use-signer-balance-first }}" == "true" ]]; then
+          ARGS="$ARGS --use-signer-balance-first"
+        fi
+
+        # Turbo services: upload and payment are configured together
+        if [[ "${{ inputs.dev }}" == "true" ]]; then
+          ARGS="$ARGS --dev"
+        fi
         if [[ -n "${{ inputs.uploader }}" ]]; then
           ARGS="$ARGS --uploader ${{ inputs.uploader }}"
+        fi
+        if [[ -n "${{ inputs.payment-url }}" ]]; then
+          ARGS="$ARGS --payment-url ${{ inputs.payment-url }}"
         fi
 
         # Add dedupe options

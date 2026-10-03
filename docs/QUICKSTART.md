@@ -21,7 +21,7 @@ pnpm add -D @ar.io/deploy
      base64 -i wallet.json | pbcopy
      ```
 
-   - **Ethereum/Polygon/KYVE:** use your raw hex private key directly
+   - **Ethereum/Polygon:** use your raw hex private key directly
    - **Solana:** use a base58 secret key, or a `solana-keygen` `id.json` wallet file
 
    > **Updating ArNS requires a Solana signer** (`--sig-type solana`), because ArNS/ANT records live on Solana programs. Use a base58 Solana secret key as your `DEPLOY_KEY` (or pass `--wallet ./id.json`).
@@ -96,6 +96,8 @@ ario-deploy deploy --arns-name my-app --sig-type solana --deploy-file ./dist/ind
 ```bash
 ario-deploy deploy --arns-name my-app --sig-type solana --cluster devnet
 ```
+
+`--cluster` only selects the Solana cluster for the ArNS update. The upload still goes to production Turbo; add `--dev` to upload and pay through Turbo's development sandbox instead.
 
 ### Upload with an Ethereum Wallet
 

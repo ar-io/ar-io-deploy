@@ -1,6 +1,6 @@
 import type { Flag } from '@oclif/core/lib/interfaces'
 
-export type SignerType = 'arweave' | 'ethereum' | 'kyve' | 'polygon' | 'solana'
+export type SignerType = 'arweave' | 'ethereum' | 'polygon' | 'solana'
 
 export interface DeployOptions {
   'arns-name'?: string

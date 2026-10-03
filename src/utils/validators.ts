@@ -20,6 +20,19 @@ export function validateTtl(value: string): string | true {
 }
 
 /**
+ * Validate a token amount in whole tokens: a positive decimal such as 0.5.
+ * Decimal strings only, so the amount converts to base units exactly.
+ */
+export function validateTokenAmount(value: string): string | true {
+  const trimmed = value.trim()
+  if (!/^(\d+(\.\d+)?|\.\d+)$/.test(trimmed) || !/[1-9]/.test(trimmed)) {
+    return 'Token amount must be a positive decimal number, e.g. 0.5'
+  }
+
+  return true
+}
+
+/**
  * Validate undername
  */
 export function validateUndername(value: string): string | true {

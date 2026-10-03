@@ -6,11 +6,10 @@
  */
 
 export interface UploadFileArgs {
-  dataItemOpts?: { tags?: Array<{ name: string; value: string }> }
+  dataItemOpts?: { paidBy?: string[]; tags?: Array<{ name: string; value: string }> }
   file?: string | Buffer
   fileSizeFactory?: () => number
   fileStreamFactory?: () => unknown
-  fundingMode?: unknown
 }
 
 export interface UploadClient {

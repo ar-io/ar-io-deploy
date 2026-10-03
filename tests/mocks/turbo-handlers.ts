@@ -127,6 +127,7 @@ export const turboUploadHandlers = [
         ethereum: '0x8wgRDgvYOrtSaWEIV21g0lTuWDUnTu4_iYj4hmA7PI0',
         solana: '8wgRDgvYOrtSaWEIV21g0lTuWDUnTu4_iYj4hmA7PI0',
       },
+      freeUploadLimitBytes: 107_520,
       gateway: 'https://turbo-gateway.com',
       version: '0.1.0',
     }),

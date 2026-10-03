@@ -141,7 +141,7 @@ export default class Deploy extends Command {
         | undefined
 
       if (interactive) {
-        const options = await promptAdvancedOptions()
+        const options = await promptAdvancedOptions(baseConfig['sig-type'])
         advancedOptions = options || undefined
       }
 
@@ -172,12 +172,16 @@ export default class Deploy extends Command {
         'dedupe-cache-max-entries': effectiveCacheMaxEntries,
         'deploy-file': baseConfig['deploy-file'],
         'deploy-folder': baseConfig['deploy-folder'],
+        dev: baseConfig.dev,
         'fallback-file': baseConfig['fallback-file'],
+        'ignore-approvals': baseConfig['ignore-approvals'],
         incremental: baseConfig.incremental,
         'incremental-gateway': baseConfig['incremental-gateway'],
         'max-token-amount': advancedOptions?.maxTokenAmount || baseConfig['max-token-amount'],
         'no-dedupe': baseConfig['no-dedupe'],
         'on-demand': advancedOptions?.onDemand || baseConfig['on-demand'],
+        'paid-by': baseConfig['paid-by'],
+        'payment-url': baseConfig['payment-url'],
         'private-key': walletConfig.privateKey,
         'rpc-url': baseConfig['rpc-url'],
         'sig-type': baseConfig['sig-type'],
@@ -185,6 +189,7 @@ export default class Deploy extends Command {
         undername: advancedOptions?.undername || baseConfig.undername,
         uploader: baseConfig.uploader,
         'use-arns': useArns,
+        'use-signer-balance-first': baseConfig['use-signer-balance-first'],
         wallet: walletConfig.wallet,
       }
 
@@ -262,6 +267,10 @@ export default class Deploy extends Command {
             rows.push(['Bundler service', chalk.cyan(deployConfig.uploader)])
           }
 
+          if (deployConfig.dev) {
+            rows.push(['Turbo', chalk.yellow('development sandbox')])
+          }
+
           rows.push(['Arweave URL', chalk.yellow(`https://turbo-gateway.com/${txOrManifestId}`)])
 
           this.log(chalk.bold(chalk.green('Deployment Successful!')))
@@ -325,6 +334,10 @@ export default class Deploy extends Command {
         const rows: DisplayRow[] = [['Tx ID', chalk.green(txOrManifestId)]]
         if (deployConfig.uploader) {
           rows.push(['Bundler service', chalk.cyan(deployConfig.uploader)])
+        }
+
+        if (deployConfig.dev) {
+          rows.push(['Turbo', chalk.yellow('development sandbox')])
         }
 
         rows.push(

@@ -2,7 +2,6 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { Readable } from 'node:stream'
 
-import { OnDemandFunding } from '@ardrive/turbo-sdk'
 import * as mime from 'mime-types'
 import pLimit from 'p-limit'
 
@@ -151,7 +150,8 @@ export async function uploadFile(
   options?: {
     cache?: TransactionCache
     compression?: CompressionConfig
-    fundingMode?: OnDemandFunding
+    /** Payers for every data item: credit-share approvals the bundler may spend. */
+    paidBy?: string[]
   },
 ): Promise<UploadResult> {
   const mimeType = mime.lookup(filePath) || 'application/octet-stream'
@@ -194,11 +194,11 @@ export async function uploadFile(
         },
         ...(encoding ? [{ name: 'Content-Encoding', value: encoding }] : []),
       ],
+      ...(options?.paidBy && { paidBy: options.paidBy }),
     },
     ...(body
       ? { fileSizeFactory: () => body.length, fileStreamFactory: () => Readable.from(body) }
       : { file: filePath }),
-    ...(options?.fundingMode && { fundingMode: options.fundingMode }),
   })
 
   if (!uploadResult?.id) {
@@ -501,7 +501,6 @@ export async function uploadFolder(
      * list. Defaults to `404.html` when present.
      */
     fallbackFile?: string
-    fundingMode?: OnDemandFunding
     /**
      * Opt in to content-hash incremental uploads: publish each file's hash as
      * a tag, recover ids the local cache is missing from the chain, and
@@ -515,6 +514,8 @@ export async function uploadFolder(
      * carries whatever the chain lookup recovered. Omitted, a plan is made here.
      */
     plan?: FolderUploadPlan
+    /** Payers for every data item: credit-share approvals the bundler may spend. */
+    paidBy?: string[]
     throwOnFailure?: boolean
   },
 ): Promise<FolderUploadResult> {
@@ -571,11 +572,10 @@ export async function uploadFolder(
         const { body } = file
 
         const uploadResult = await turbo.uploadFile({
-          dataItemOpts: { tags },
+          dataItemOpts: { tags, ...(options?.paidBy && { paidBy: options.paidBy }) },
           ...(body
             ? { fileSizeFactory: () => body.length, fileStreamFactory: () => Readable.from(body) }
             : { file: file.fullPath }),
-          ...(options?.fundingMode && { fundingMode: options.fundingMode }),
         })
 
         if (!uploadResult?.id) {
@@ -685,10 +685,10 @@ export async function uploadFolder(
         { name: 'Content-Type', value: 'application/x.arweave-manifest+json' },
         { name: 'Device', value: 'manifest@1.0' },
       ],
+      ...(options?.paidBy && { paidBy: options.paidBy }),
     },
     fileSizeFactory: () => manifestBuffer.length,
     fileStreamFactory: () => Readable.from(manifestBuffer),
-    ...(options?.fundingMode && { fundingMode: options.fundingMode }),
   })
 
   if (!manifestUploadResult?.id) {

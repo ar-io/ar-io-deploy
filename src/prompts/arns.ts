@@ -1,6 +1,16 @@
 import { confirm, input, select } from '@inquirer/prompts'
 
-import { validateArnsName, validateTtl } from '../utils/validators.js'
+import type { SignerType } from '../types/index.js'
+import { ON_DEMAND_TOKENS, type OnDemandToken } from '../utils/turbo.js'
+import { validateArnsName, validateTokenAmount, validateTtl } from '../utils/validators.js'
+
+const ON_DEMAND_TOKEN_LABELS: Record<OnDemandToken, string> = {
+  ario: 'ARIO (Solana)',
+  'base-eth': 'ETH (Base)',
+  'base-usdc': 'USDC (Base)',
+  solana: 'SOL',
+  'solana-usdc': 'USDC (Solana)',
+}
 
 export interface AdvancedOptions {
   cluster: string
@@ -51,7 +61,7 @@ export async function promptCluster(): Promise<string> {
   })
 }
 
-export async function promptAdvancedOptions(): Promise<AdvancedOptions | null> {
+export async function promptAdvancedOptions(sigType: string): Promise<AdvancedOptions | null> {
   const wantsAdvanced = await confirm({
     default: false,
     message: 'Configure advanced options?',
@@ -66,33 +76,27 @@ export async function promptAdvancedOptions(): Promise<AdvancedOptions | null> {
   const cluster = await promptCluster()
 
   // On-demand payment options
-  const wantsOnDemand = await confirm({
-    default: false,
-    message: 'Enable on-demand payment?',
-  })
+  // Only offer tokens the upload key can pay with; an Arweave key has none.
+  const tokens: readonly OnDemandToken[] = ON_DEMAND_TOKENS[sigType as SignerType] ?? []
+  const wantsOnDemand =
+    tokens.length > 0 &&
+    (await confirm({
+      default: false,
+      message: 'Enable on-demand payment?',
+    }))
 
   let onDemand: string | undefined
   let maxTokenAmount: string | undefined
 
   if (wantsOnDemand) {
     onDemand = await select({
-      choices: [
-        { name: 'ARIO', value: 'ario' },
-        { name: 'ETH (Base Network)', value: 'base-eth' },
-      ],
+      choices: tokens.map((token) => ({ name: ON_DEMAND_TOKEN_LABELS[token], value: token })),
       message: 'Select payment token:',
     })
 
     maxTokenAmount = await input({
-      message: 'Enter maximum token amount:',
-      validate(value: string) {
-        const num = Number.parseFloat(value)
-        if (Number.isNaN(num) || num <= 0) {
-          return 'Please enter a valid positive number'
-        }
-
-        return true
-      },
+      message: 'Most the top-up may spend, in whole tokens:',
+      validate: validateTokenAmount,
     })
   }
 

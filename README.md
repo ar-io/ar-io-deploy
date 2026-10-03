@@ -32,6 +32,7 @@ Your app is now permanently live at `https://myapp.ar.io`.
 - [Prerequisites](#prerequisites)
 - [Commands](#commands)
 - [On-Demand Payment](#on-demand-payment)
+- [Shared credits](#shared-credits)
 - [Bundler service](#bundler-service)
 - [Command Options](#command-options)
 - [Deduplication](#deduplication)
@@ -54,7 +55,8 @@ Your app is now permanently live at `https://myapp.ar.io`.
 ## Features
 
 - **Turbo SDK Integration:** Uses Turbo SDK for fast, reliable file uploads to Arweave
-- **On-Demand Payment:** Pay with ARIO or Base-ETH tokens on-demand during upload
+- **On-Demand Payment:** Top up Turbo credits with ARIO, SOL, USDC or Base ETH when a deploy needs them
+- **Shared credits:** Spend credits other wallets have shared with your upload key
 - **Arweave Manifest v0.2.0:** Creates manifests with fallback support for SPAs
 - **Optional ArNS Updates:** Updates ArNS records via ANT with new transaction IDs
 - **Automated Workflow:** Integrates with GitHub Actions for continuous deployment
@@ -103,7 +105,7 @@ They can be the same Solana wallet or two different wallets — provide each exp
    base64 -i wallet.json | pbcopy
    ```
 
-2. **Ethereum/Polygon/KYVE signers:** Use your raw private key (no encoding needed) as `DEPLOY_KEY`.
+2. **Ethereum/Polygon signers:** Use your raw private key (no encoding needed) as `DEPLOY_KEY`.
 3. **Solana signer:** Use a base58-encoded secret key as `DEPLOY_KEY`, or a `solana-keygen` `id.json` byte-array wallet file via `--wallet`.
 
 ### ArNS authority key (`ARNS_KEY`)
@@ -257,61 +259,56 @@ ario-deploy deploy --sig-type solana --private-key "<base58-secret-key>"
 
 ## On-Demand Payment
 
-Use on-demand payment to automatically fund uploads with ARIO or Base-ETH tokens when your Turbo balance is insufficient:
+With `--on-demand`, a deploy whose credits cannot cover the upload buys what it is short, once, before the first file uploads. `--max-token-amount` is required and caps that purchase for the whole deploy.
 
-Deploy with ARIO on-demand payment:
+The token has to be one your upload key can pay with:
+
+| Upload key (`--sig-type`) | `--on-demand` tokens                  |
+| ------------------------- | ------------------------------------- |
+| `solana`                  | `ario`, `solana`, `solana-usdc`       |
+| `ethereum`, `polygon`     | `base-eth`, `base-usdc`               |
+| `arweave`                 | none: top up Turbo credits in advance |
 
 ```bash
-ario-deploy deploy --wallet ./wallet.json --deploy-folder ./dist --on-demand ario --max-token-amount 1.5
-```
+# ARIO is a Solana token, so it needs a Solana upload key
+ario-deploy deploy --sig-type solana --wallet ./id.json --deploy-folder ./dist --on-demand ario --max-token-amount 1.5
 
-Deploy with Base-ETH on-demand payment (using Ethereum signer):
-
-```bash
+# ETH on Base, with an Ethereum key
 ario-deploy deploy --sig-type ethereum --private-key "0x..." --on-demand base-eth --max-token-amount 0.1
 ```
 
-**On-Demand Payment Options:**
-
-- `--on-demand`: Token to use for on-demand payment (`ario` or `base-eth`)
-- `--max-token-amount`: Maximum token amount to spend (in native token units, e.g., `1.5` for 1.5 ARIO or `0.1` for 0.1 ETH)
-
 **How it works:**
 
-1. Checks your Turbo balance before upload
-2. If balance is insufficient, converts tokens to Turbo credits on-demand
-3. Automatically adds a 10% buffer (`topUpBufferMultiplier: 1.1`) for reliability
-4. Proceeds with upload once funded
+1. Each file the deploy will actually upload is priced through Turbo, against the upload service's own free limit.
+2. If the credits you can spend (see [Shared credits](#shared-credits)) cover it, nothing is bought.
+3. Otherwise the shortfall plus a 10% buffer is converted at Turbo's quoted rate. If that exceeds `--max-token-amount`, the deploy stops before paying anything.
+4. The top-up is paid once, the deploy waits for Turbo to credit it, then uploads.
 
-**Token compatibility:**
+## Shared credits
 
-- **ARIO**: Works with Arweave signer
-- **Base-ETH**: Works with Ethereum signer (Base Network)
+Credits another wallet has shared with your upload key ([Turbo credit sharing](https://docs.ardrive.io/docs/turbo/)) are used automatically: the credit check counts them, and every data item names the sharing wallets as payers, which is what the bundler needs to charge them. Your own balance covers whatever they do not.
+
+- `--paid-by <addresses>`: pay only from these wallets' shared credits (comma-separated).
+- `--ignore-approvals`: ignore shared credits; pay only from the upload key's own balance.
+- `--use-signer-balance-first`: spend the upload key's own balance before shared credits.
 
 ## Bundler service
 
-Uploads go through a bundler service that accepts signed data items and posts them to Arweave. By default, ario-deploy uses the [Turbo](https://docs.ardrive.io/docs/turbo/) API and ArDrive’s production bundler (`https://upload.ardrive.io`). **`--uploader`** sets the **base URL** of the bundler service to use (scheme + host; typically no path).
+Uploads go through Turbo: an upload service that accepts signed data items, and a payment service that answers balance, price and top-up questions. The two belong to the same network, and ario-deploy configures them together.
 
-| When to use               | Example value                                           |
-| ------------------------- | ------------------------------------------------------- |
-| **Default** (omit flag)   | ArDrive production bundler — same as Turbo CLI defaults |
-| **Arweave bundler**       | `https://turbo.ardrive.io`                              |
-| **Development / staging** | `https://upload.services.ar-io.dev`                     |
-| **Custom or self-hosted** | Your own base URL if it implements the Turbo API        |
+| When to use                        | Flags                                                              |
+| ---------------------------------- | ------------------------------------------------------------------ |
+| **Default** (production)           | none: `https://upload.ardrive.io` and `https://payment.ardrive.io` |
+| **Development sandbox**            | `--dev`                                                            |
+| **Custom or self-hosted services** | `--uploader <url>` and `--payment-url <url>`                       |
 
-**Examples:**
+`--dev` selects both sandbox services (`https://upload.services.ar-io.dev` and `https://payment.services.ar-io.dev`) and testnet RPCs for `--on-demand`. Passing the sandbox URL to `--uploader` alone does the same. A custom `--uploader` without `--payment-url` keeps the production payment service and prints a warning, since balance checks and top-ups go there.
 
 ```bash
-# Deploy using Arweave’s bundler service
-ario-deploy deploy --wallet ./wallet.json --deploy-folder ./dist --uploader https://turbo.ardrive.io
-
-ario-deploy upload --wallet ./wallet.json --deploy-folder ./dist --uploader https://turbo.ardrive.io
+ario-deploy upload --wallet ./wallet.json --deploy-folder ./dist --dev
 ```
 
-**Notes:**
-
-- Turbo billing and signer behavior follow Turbo.
-- Use a **base URL only** (e.g. `https://turbo.ardrive.io`), not a path to a specific file or route.
+The free upload limit is read from the upload service, so it follows the network: 105 KiB per item in production, 5 MiB in the sandbox.
 
 ## Command Options
 
@@ -329,25 +326,33 @@ ario-deploy upload --wallet ./wallet.json --deploy-folder ./dist --uploader http
 
 Upload key (pays for the upload):
 
-- `--sig-type, -s`: Signer type for the upload key. Choices: `arweave`, `ethereum`, `polygon`, `kyve`, `solana`. Default: `arweave`
-- `--wallet, -w`: Path to the upload wallet file (JWK for Arweave, private key for Ethereum/Polygon/KYVE, `solana-keygen` `id.json` for Solana). Falls back to `DEPLOY_KEY`.
+- `--sig-type, -s`: Signer type for the upload key. Choices: `arweave`, `ethereum`, `polygon`, `solana`. Default: `arweave`
+- `--wallet, -w`: Path to the upload wallet file (JWK for Arweave, private key for Ethereum/Polygon, `solana-keygen` `id.json` for Solana). Falls back to `DEPLOY_KEY`.
 - `--private-key, -k`: Upload private-key string (alternative to `--wallet`). JWK JSON for Arweave, hex for EVM chains, base58 secret key for Solana.
 
 ArNS authority key (controls the name, signs the update — always Solana):
 
 - `--arns-wallet`: Path to the Solana `solana-keygen` `id.json` wallet that controls the ArNS name. Falls back to `ARNS_KEY`.
 - `--arns-private-key`: Base58 Solana secret key for the ArNS authority (alternative to `--arns-wallet`). Falls back to `ARNS_KEY`.
-- `--on-demand`: Enable on-demand payment with specified token. Choices: `ario`, `base-eth`
-- `--max-token-amount`: Maximum token amount for on-demand payment (used with `--on-demand`)
+
+Payment:
+
+- `--on-demand`: Top up with this token if the credits cannot cover the upload. Choices: `ario`, `solana`, `solana-usdc` (Solana keys), `base-eth`, `base-usdc` (EVM keys). Requires `--max-token-amount`. See [On-Demand Payment](#on-demand-payment).
+- `--max-token-amount`: Most the top-up may spend, in whole tokens (e.g. `0.5`). Caps the whole deploy.
+- `--paid-by`, `--ignore-approvals`, `--use-signer-balance-first`: who pays. See [Shared credits](#shared-credits).
+- `--dev`: Use Turbo's development sandbox for both upload and payment.
+- `--uploader` (alias `--upload-url`), `--payment-url`: Custom Turbo services. See [Bundler service](#bundler-service).
+
+Upload behaviour:
+
 - `--no-dedupe`: Disable deduplication (do not cache or reuse previous uploads)
 - `--dedupe-cache-max-entries`: Maximum number of entries to keep in the dedupe cache (LRU). Default: `10000`
 - `--incremental`: Reuse files already on Arweave, including on a machine with no local cache. Off by default. Cannot be combined with `--no-dedupe` or `--dedupe-cache-max-entries 0`. See [Incremental uploads](#incremental-uploads).
 - `--incremental-gateway`: Gateway whose GraphQL endpoint is queried for past uploads when `--incremental` is set. Default: `https://turbo-gateway.com`
 - `--compress`: Compress files before upload and tag them with `Content-Encoding`. Choices: `gzip`, `br`, `none` (default). See [Compression](#compression).
 - `--compress-exclude`: Comma-separated globs of files to upload uncompressed, e.g. `"llms*.txt,*.md"`
-- `--uploader`: Custom Turbo upload service base URL. See the **Bundler service** section.
 
-**`upload`** (explicit upload without ArNS): accepts `--deploy-folder`, `--deploy-file`, `--fallback-file`, wallet/signer flags, `--uploader`, `--on-demand` / `--max-token-amount`, the dedupe and incremental flags, and `--compress` / `--compress-exclude` only.
+**`upload`** (explicit upload without ArNS): accepts `--deploy-folder`, `--deploy-file`, `--fallback-file`, wallet/signer flags, the payment flags, the dedupe and incremental flags, and `--compress` / `--compress-exclude` only.
 
 ## Deduplication
 
@@ -469,7 +474,7 @@ Add deployment scripts to your `package.json`:
     "deploy": "pnpm build && ario-deploy deploy --arns-name <ARNS_NAME>",
     "deploy:staging": "pnpm build && ario-deploy deploy --arns-name <ARNS_NAME> --undername staging",
     "deploy:devnet": "pnpm build && ario-deploy deploy --arns-name <ARNS_NAME> --cluster devnet",
-    "deploy:on-demand": "pnpm build && ario-deploy deploy --arns-name <ARNS_NAME> --on-demand ario --max-token-amount 1.5"
+    "deploy:on-demand": "pnpm build && ario-deploy deploy --arns-name <ARNS_NAME> --sig-type solana --on-demand ario --max-token-amount 1.5"
   }
 }
 ```
@@ -480,10 +485,10 @@ These read the upload key from `DEPLOY_KEY` and the Solana ArNS authority key fr
 DEPLOY_KEY=$(base64 -i wallet.json) ARNS_KEY=<base58-solana-secret-key> pnpm deploy
 ```
 
-Or with on-demand payment:
+Or with on-demand payment in ARIO, which needs a Solana upload key (here the same key does both jobs):
 
 ```bash
-DEPLOY_KEY=$(base64 -i wallet.json) ARNS_KEY=<base58-solana-secret-key> pnpm deploy:on-demand
+DEPLOY_KEY=<base58-solana-secret-key> ARNS_KEY=<base58-solana-secret-key> pnpm deploy:on-demand
 ```
 
 ## GitHub Action
@@ -493,7 +498,7 @@ The easiest way to integrate ario-deploy into your CI/CD pipeline is using our o
 ### Basic Usage
 
 ```yaml
-- uses: ar-io/ar-io-deploy@v1.0.0
+- uses: ar-io/ar-io-deploy@v2.0.0
   with:
     deploy-key: ${{ secrets.DEPLOY_KEY }} # upload key (pays for the upload)
     arns-key: ${{ secrets.ARNS_KEY }} # Solana ArNS authority key
@@ -530,7 +535,7 @@ jobs:
         run: npm run build
 
       - name: Deploy Preview
-        uses: ar-io/ar-io-deploy@v1.0.0
+        uses: ar-io/ar-io-deploy@v2.0.0
         with:
           deploy-key: ${{ secrets.DEPLOY_KEY }}
           arns-key: ${{ secrets.ARNS_KEY }}
@@ -575,7 +580,7 @@ jobs:
         run: npm run build
 
       - name: Deploy to Permaweb
-        uses: ar-io/ar-io-deploy@v1.0.0
+        uses: ar-io/ar-io-deploy@v2.0.0
         with:
           deploy-key: ${{ secrets.DEPLOY_KEY }}
           arns-key: ${{ secrets.ARNS_KEY }}
@@ -587,12 +592,13 @@ jobs:
 
 ```yaml
 - name: Deploy with ARIO on-demand
-  uses: ar-io/ar-io-deploy@v1.0.0
+  uses: ar-io/ar-io-deploy@v2.0.0
   with:
     deploy-key: ${{ secrets.DEPLOY_KEY }}
     arns-key: ${{ secrets.ARNS_KEY }}
     arns-name: myapp
     deploy-folder: ./dist
+    sig-type: solana # ARIO is a Solana token, so the upload key must be Solana
     on-demand: ario
     max-token-amount: '2.0'
 ```
@@ -603,7 +609,7 @@ ArNS updates run against the Solana ARIO programs. Provide the Solana ArNS autho
 
 ```yaml
 - name: Deploy and update ArNS
-  uses: ar-io/ar-io-deploy@v1.0.0
+  uses: ar-io/ar-io-deploy@v2.0.0
   with:
     deploy-key: ${{ secrets.DEPLOY_KEY }} # upload key
     arns-key: ${{ secrets.ARNS_KEY }} # Solana ArNS authority key
@@ -618,7 +624,7 @@ By default, the action caches transaction IDs to avoid re-uploading unchanged fi
 
 ```yaml
 - name: Deploy without dedupe
-  uses: ar-io/ar-io-deploy@v1.0.0
+  uses: ar-io/ar-io-deploy@v2.0.0
   with:
     deploy-key: ${{ secrets.DEPLOY_KEY }}
     deploy-folder: ./dist
@@ -629,7 +635,7 @@ You can also limit the cache size:
 
 ```yaml
 - name: Deploy with limited cache
-  uses: ar-io/ar-io-deploy@v1.0.0
+  uses: ar-io/ar-io-deploy@v2.0.0
   with:
     deploy-key: ${{ secrets.DEPLOY_KEY }}
     deploy-folder: ./dist
@@ -716,7 +722,7 @@ jobs:
       - run: pnpm build
 
       - name: Deploy with ARIO on-demand
-        run: ario-deploy deploy --arns-name my-app --on-demand ario --max-token-amount 2.0
+        run: ario-deploy deploy --arns-name my-app --sig-type solana --on-demand ario --max-token-amount 2.0
         env:
           DEPLOY_KEY: ${{ secrets.DEPLOY_KEY }} # upload key (pays for the upload)
           ARNS_KEY: ${{ secrets.ARNS_KEY }} # Solana ArNS authority key
@@ -829,7 +835,9 @@ ar-io-deploy/
 - **Error: "ArNS name does not exist":** Verify the ArNS name is correct and exists in the specified network
 - **Upload timeouts:** Files have a timeout for upload. Large files may fail and require optimization
 - **Insufficient Turbo Credits:** Use `--on-demand` with `--max-token-amount` to automatically fund uploads when balance is low
-- **On-demand payment fails:** Ensure your wallet has sufficient tokens (ARIO or Base-ETH) and the token type matches your signer (`ario` with Arweave, `base-eth` with Ethereum)
+- **On-demand payment fails:** Ensure the upload wallet holds the token, and that the token matches the key: `ario`, `solana` or `solana-usdc` with `--sig-type solana`; `base-eth` or `base-usdc` with an Ethereum or Polygon key
+- **"Insufficient Turbo credits" on the sandbox with valid sandbox credits:** Use `--dev`, or pass `--payment-url https://payment.services.ar-io.dev` with a custom `--uploader`, so the balance is read from the sandbox
+- **Credits shared with you are not used:** They are used automatically unless `--ignore-approvals` is set; with `--paid-by`, only the listed wallets count
 - **Deep links 404 but the homepage loads:** The manifest has no `fallback`. Emit a `404.html` or pass `--fallback-file index.html` — see [Single-page apps](#single-page-apps)
 - **Deep links still 404 right after a redeploy:** Gateways cache the previous manifest's 404s for around a minute. Retry with a cache-busting query string before assuming the deploy failed
 - **Error: "Fallback file not found in folder":** `--fallback-file` takes a path relative to the deploy folder, e.g. `index.html`, not `./dist/index.html`

@@ -82,7 +82,7 @@ TypeScript type definitions shared across the codebase.
 
 ```typescript
 // src/types/index.ts
-export type SignerType = 'arweave' | 'ethereum' | 'polygon' | 'kyve'
+export type SignerType = 'arweave' | 'ethereum' | 'polygon' | 'solana'
 export interface DeployOptions {
   /* ... */
 }

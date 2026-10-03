@@ -28,8 +28,9 @@ export default class Upload extends Command {
     '<%= config.bin %> upload --wallet ./wallet.json --deploy-folder ./dist',
     '<%= config.bin %> upload --wallet ./wallet.json --deploy-folder ./dist --incremental',
     '<%= config.bin %> upload --wallet ./wallet.json --deploy-file ./dist/index.html',
-    '<%= config.bin %> upload --private-key "$(cat wallet.json)" --on-demand ario --max-token-amount 1.5',
-    '<%= config.bin %> upload --wallet ./wallet.json --uploader https://turbo.ardrive.io',
+    '<%= config.bin %> upload --wallet ./id.json --sig-type solana --on-demand ario --max-token-amount 1.5',
+    '<%= config.bin %> upload --wallet ./wallet.json --dev',
+    '<%= config.bin %> upload --wallet ./wallet.json --paid-by <payer-address>',
     '<%= config.bin %> upload --wallet ./id.json --sig-type solana',
   ]
 
@@ -89,13 +90,18 @@ export default class Upload extends Command {
         'dedupe-cache-max-entries': effectiveCacheMaxEntries,
         'deploy-file': baseConfig['deploy-file'],
         'deploy-folder': baseConfig['deploy-folder'],
+        dev: baseConfig.dev,
         'fallback-file': baseConfig['fallback-file'],
+        'ignore-approvals': baseConfig['ignore-approvals'],
         incremental: baseConfig.incremental,
         'incremental-gateway': baseConfig['incremental-gateway'],
         'max-token-amount': baseConfig['max-token-amount'],
         'on-demand': baseConfig['on-demand'],
+        'paid-by': baseConfig['paid-by'],
+        'payment-url': baseConfig['payment-url'],
         'sig-type': baseConfig['sig-type'],
         uploader: baseConfig.uploader,
+        'use-signer-balance-first': baseConfig['use-signer-balance-first'],
       }
 
       if (interactive) {
@@ -148,6 +154,10 @@ export default class Upload extends Command {
 
         if (uploadCfg.uploader) {
           rows.push(['Bundler service', chalk.cyan(uploadCfg.uploader)])
+        }
+
+        if (uploadCfg.dev) {
+          rows.push(['Turbo', chalk.yellow('development sandbox')])
         }
 
         rows.push(['Arweave URL', chalk.yellow(`https://turbo-gateway.com/${txOrManifestId}`)])

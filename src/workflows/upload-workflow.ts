@@ -1,10 +1,8 @@
 import fs from 'node:fs'
 
 import {
-  ARIOToTokenAmount,
-  ETHToTokenAmount,
-  OnDemandFunding,
-  TurboAuthenticatedConfiguration,
+  type TokenTools,
+  type TurboAuthenticatedConfiguration,
   TurboFactory,
 } from '@ardrive/turbo-sdk'
 import ora from 'ora'
@@ -25,6 +23,20 @@ import {
 } from '../utils/incremental.js'
 import { expandPath } from '../utils/path.js'
 import { createSigner } from '../utils/signer.js'
+import {
+  devTokenRpc,
+  fetchFreeUploadLimit,
+  fromBaseUnits,
+  fundShortfall,
+  type OnDemandToken,
+  type PayerOptions,
+  quoteUploadWinc,
+  resolvePaidBy,
+  resolveTurboServices,
+  spendableWinc,
+  toBaseUnits,
+  validateOnDemandToken,
+} from '../utils/turbo.js'
 import type { UploadClient, UploadCost, UploadSize } from '../utils/upload-types.js'
 import {
   type FolderUploadPlan,
@@ -43,16 +55,26 @@ export interface UploadWorkflowConfig {
   'dedupe-cache-max-entries': number
   'deploy-file'?: string
   'deploy-folder': string
+  /** Use Turbo's development sandbox for both upload and payment. */
+  dev?: boolean
   /** Relative path served for routes the manifest does not list. */
   'fallback-file'?: string
+  /** Pay only from the upload key's own balance. */
+  'ignore-approvals'?: boolean
   /** Opt in to content-hash incremental uploads. */
   incremental?: boolean
   /** Gateway whose GraphQL endpoint answers "have I uploaded these bytes?". */
   'incremental-gateway'?: string
   'max-token-amount'?: string
   'on-demand'?: string
+  /** Comma-separated addresses whose shared credits pay. */
+  'paid-by'?: string
+  /** Turbo payment service URL; paired with the uploader when omitted. */
+  'payment-url'?: string
   'sig-type': string
   uploader?: string
+  /** Spend the upload key's balance before shared credits. */
+  'use-signer-balance-first'?: boolean
 }
 
 function formatBytes(bytes: number): string {
@@ -63,6 +85,11 @@ function formatBytes(bytes: number): string {
 
 export interface UploadWorkflowIo {
   error: (msg: string) => never
+  /**
+   * The chain an on-demand top-up is paid on. Omitted, Turbo uses the token's
+   * own tooling; tests pass a stand-in so a top-up never leaves the machine.
+   */
+  tokenTools?: TokenTools
 }
 
 /**
@@ -257,22 +284,74 @@ export async function runUploadWorkflow(
 ): Promise<UploadWorkflowResult> {
   const spinner = ora()
 
+  /*
+   * Everything that can be refused without a network call is refused here,
+   * before hashing a folder: a top-up token the key cannot pay with, or a
+   * cap that is not a number.
+   */
+  const onDemandToken = config['on-demand'] as OnDemandToken | undefined
+  let maxTokenAmount: bigint | undefined
+  if (onDemandToken) {
+    const tokenCheck = validateOnDemandToken(config['sig-type'], onDemandToken)
+    if (tokenCheck !== true) {
+      io.error(tokenCheck)
+    }
+
+    if (!config['max-token-amount']) {
+      io.error('--on-demand needs --max-token-amount, the most the top-up may spend.')
+    }
+
+    try {
+      maxTokenAmount = toBaseUnits(config['max-token-amount'], onDemandToken)
+    } catch (error) {
+      io.error(error instanceof Error ? error.message : String(error))
+    }
+  }
+
+  const payerOptions: PayerOptions = {
+    ignoreApprovals: config['ignore-approvals'],
+    paidBy: config['paid-by']
+      ?.split(',')
+      .map((address) => address.trim())
+      .filter(Boolean),
+    useSignerBalanceFirst: config['use-signer-balance-first'],
+  }
+
   spinner.start('Creating signer')
-  const { signer, token } = createSigner(config['sig-type'] as SignerType, deployKey)
+  const { signer, token: signerToken } = createSigner(config['sig-type'] as SignerType, deployKey)
   spinner.succeed(`Signer created (${chalk.cyan(config['sig-type'])})`)
+
+  const services = resolveTurboServices({
+    dev: config.dev,
+    paymentUrl: config['payment-url'],
+    uploadUrl: config.uploader,
+  })
+  for (const warning of services.warnings) {
+    spinner.warn(warning)
+  }
 
   spinner.start('Initializing Turbo')
 
-  const turboFactoryArgs: TurboAuthenticatedConfiguration = { signer, token }
-
-  if (config.uploader) {
-    turboFactoryArgs.uploadServiceConfig = { url: config.uploader }
+  /*
+   * Turbo pays a top-up in the client's own token, so with --on-demand the
+   * client is configured with the funding token rather than the signer's.
+   * Within a signer family that leaves the billing address unchanged.
+   */
+  const turboFactoryArgs: TurboAuthenticatedConfiguration = {
+    paymentServiceConfig: { url: services.paymentUrl },
+    signer,
+    token: onDemandToken ?? signerToken,
+    uploadServiceConfig: { url: services.uploadUrl },
+    ...(onDemandToken && services.development && { gatewayUrl: devTokenRpc(onDemandToken) }),
+    ...(io.tokenTools && { tokenTools: io.tokenTools }),
   }
 
   const turbo = TurboFactory.authenticated(turboFactoryArgs)
   const uploadClient: UploadClient = turbo as UploadClient
 
-  spinner.succeed('Turbo initialized')
+  spinner.succeed(
+    `Turbo initialized${services.development ? ` (${chalk.yellow('development sandbox')})` : ''}`,
+  )
 
   /*
    * Spinner phase, so a warning can restore whatever line was showing. Any
@@ -290,34 +369,6 @@ export async function runUploadWorkflow(
     if (phase) {
       spinner.start(phase)
     }
-  }
-
-  let fundingMode: OnDemandFunding | undefined
-  if (config['on-demand'] && config['max-token-amount']) {
-    const tokenType = config['on-demand']
-    const maxAmount = Number.parseFloat(config['max-token-amount'])
-
-    let maxTokenAmount: ReturnType<typeof ARIOToTokenAmount>
-    switch (tokenType) {
-      case 'ario': {
-        maxTokenAmount = ARIOToTokenAmount(maxAmount)
-        break
-      }
-
-      case 'base-eth': {
-        maxTokenAmount = ETHToTokenAmount(maxAmount)
-        break
-      }
-
-      default: {
-        throw new Error(`Unsupported on-demand token type: ${tokenType}`)
-      }
-    }
-
-    fundingMode = new OnDemandFunding({
-      maxTokenAmount,
-      topUpBufferMultiplier: 1.1,
-    })
   }
 
   const compression = parseCompressionConfig(config.compress, config['compress-exclude'])
@@ -378,47 +429,98 @@ export async function runUploadWorkflow(
     )
   }
 
-  if (!fundingMode && turbo) {
-    spinner.start('Checking Turbo credits for upload')
+  /*
+   * Price exactly what will be sent, decide who pays, and make sure they can.
+   * Turbo bills per data item, so the plan's items are priced one by one
+   * against the upload service's own free limit. A shortfall is either
+   * refused or, with --on-demand, bought in a single top-up for the whole
+   * plan before the first upload.
+   */
+  let { paidBy } = payerOptions
+  startPhase('Checking Turbo credits')
 
+  /** Why the upload cannot go ahead, or undefined when it can. */
+  const ensureCredits = async (): Promise<string | undefined> => {
+    let requiredWinc: bigint
+    let availableWinc: bigint
     try {
-      const uploadBytes = folderPlan
-        ? folderPlan.uploadBytes + folderPlan.manifestBytes
-        : fs.statSync(expandPath(config['deploy-file']!)).size
+      const itemBytes = folderPlan
+        ? [
+            ...folderPlan.files
+              .filter((file) => file.uploadBytes > 0)
+              .map((file) => file.uploadBytes),
+            folderPlan.manifestBytes,
+          ]
+        : [fs.statSync(expandPath(config['deploy-file']!)).size]
 
-      const FREE_THRESHOLD_BYTES = 107_520 // ~105 KiB
-
-      if (uploadBytes >= FREE_THRESHOLD_BYTES) {
-        const [uploadCost] = await turbo.getUploadCosts({ bytes: [uploadBytes] })
-        const balance = await turbo.getBalance()
-
-        const requiredWinc = BigInt(uploadCost.winc)
-        const currentWinc = BigInt(balance.winc)
-
-        if (requiredWinc > currentWinc) {
-          spinner.fail('Insufficient Turbo credits')
-
-          // io.error throws, so nothing after it runs.
-          writer?.dispose()
-          io.error(
-            [
-              'Insufficient Turbo credits for this upload.',
-              `Required: ${requiredWinc.toString()} winc, available: ${currentWinc.toString()} winc.`,
-              '',
-              'Top up your Turbo balance (or re-run with --on-demand and --max-token-amount).',
-            ].join(' '),
-          )
-        }
+      const freeLimit = await fetchFreeUploadLimit(services.uploadUrl)
+      if (freeLimit === undefined) {
+        warn(`${services.uploadUrl} did not report its free upload limit; pricing every item`)
       }
 
-      spinner.succeed('Turbo credits check passed')
-    } catch (balanceError) {
+      requiredWinc = await quoteUploadWinc(turbo, itemBytes, freeLimit ?? 0)
+      if (requiredWinc === 0n) {
+        spinner.succeed('Turbo credits check passed (within the free upload limit)')
+        return undefined
+      }
+
+      const balance = await turbo.getBalance()
+      paidBy = resolvePaidBy(
+        payerOptions,
+        balance.receivedApprovals ?? [],
+        await turbo.signer.getNativeAddress(),
+      )
+      availableWinc = spendableWinc(balance, payerOptions)
+    } catch (error) {
       spinner.fail('Failed to check Turbo credits')
-      const errorMessage =
-        balanceError instanceof Error ? balanceError.message : String(balanceError)
-      writer?.dispose()
-      io.error(`Failed to check Turbo credits: ${errorMessage}`)
+      return `Failed to check Turbo credits: ${error instanceof Error ? error.message : String(error)}`
     }
+
+    const payerNote = paidBy ? ` (shared credits from ${paidBy.join(', ')})` : ''
+    if (requiredWinc <= availableWinc) {
+      spinner.succeed(`Turbo credits check passed${payerNote}`)
+      return undefined
+    }
+
+    if (!onDemandToken || maxTokenAmount === undefined) {
+      spinner.fail('Insufficient Turbo credits')
+      return [
+        'Insufficient Turbo credits for this upload.',
+        `Required: ${requiredWinc} winc, available: ${availableWinc} winc${payerNote}.`,
+        '',
+        'Top up your Turbo balance (or re-run with --on-demand and --max-token-amount).',
+      ].join(' ')
+    }
+
+    startPhase(`Topping up Turbo credits with ${chalk.cyan(onDemandToken)}`)
+    try {
+      const funding = await fundShortfall(turbo, {
+        maxTokenAmount,
+        shortfallWinc: requiredWinc - availableWinc,
+        token: onDemandToken,
+      })
+      const spent = `${fromBaseUnits(funding.tokenAmount, onDemandToken)} ${onDemandToken}`
+      if (funding.confirmed) {
+        spinner.succeed(`Topped up with ${spent} (${chalk.gray(funding.txId)})`)
+      } else {
+        spinner.warn(
+          `Top-up of ${spent} (${funding.txId}) is not confirmed yet; uploading anyway, which fails if the credits have not landed`,
+        )
+      }
+    } catch (error) {
+      spinner.fail('On-demand top-up failed')
+      return `On-demand top-up failed: ${error instanceof Error ? error.message : String(error)}`
+    }
+
+    return undefined
+  }
+
+  const creditProblem = await ensureCredits()
+  phase = ''
+  if (creditProblem) {
+    // io.error throws, so nothing after it runs.
+    writer?.dispose()
+    io.error(creditProblem)
   }
 
   let txOrManifestId: string
@@ -443,7 +545,7 @@ export async function runUploadWorkflow(
       const uploadResult = await uploadFile(uploadClient, filePath, {
         cache,
         compression,
-        fundingMode,
+        paidBy,
       })
 
       if (!uploadResult.transactionId) {
@@ -477,8 +579,8 @@ export async function runUploadWorkflow(
         uploadResult = await uploadFolder(uploadClient, folderPath, {
           compression,
           fallbackFile: config['fallback-file'],
-          fundingMode,
           incremental,
+          paidBy,
           plan: folderPlan,
           throwOnFailure: true,
         })

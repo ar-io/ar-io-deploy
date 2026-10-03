@@ -22,7 +22,6 @@ describe('deployKeyFromWalletFile', () => {
   it('trims raw private keys for EVM-style chains', () => {
     expect(deployKeyFromWalletFile('ethereum', '  0xabc123  \n')).toBe('0xabc123')
     expect(deployKeyFromWalletFile('polygon', ' deadbeef ')).toBe('deadbeef')
-    expect(deployKeyFromWalletFile('kyve', ' key ')).toBe('key')
   })
 })
 

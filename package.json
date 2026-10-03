@@ -47,7 +47,7 @@
   ],
   "dependencies": {
     "@ar.io/sdk": "4.0.2-alpha.4",
-    "@ardrive/turbo-sdk": "^1.41.3",
+    "@ardrive/turbo-sdk": "^2.1.0",
     "@dha-team/arbundles": "^1.0.4",
     "@inquirer/prompts": "^7.2.0",
     "@oclif/core": "^4.0.30",

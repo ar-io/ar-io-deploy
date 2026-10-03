@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-ARIO Deploy (`@ar.io/deploy`) is a TypeScript CLI tool for deploying web apps to the permaweb (Arweave) with optional ArNS (Arweave Name Service) record updates via Solana. Built on oclif, it uses Turbo SDK for uploads and supports five signer types (Arweave, Ethereum, Polygon, KYVE, Solana).
+ARIO Deploy (`@ar.io/deploy`) is a TypeScript CLI tool for deploying web apps to the permaweb (Arweave) with optional ArNS (Arweave Name Service) record updates via Solana. Built on oclif, it uses Turbo SDK for uploads and supports four signer types (Arweave, Ethereum, Polygon, Solana). KYVE was dropped in 2.0 because Turbo SDK 2.x removed the token.
 
 ## Build & Development Commands
 
@@ -14,8 +14,8 @@ pnpm build                # Vite build + TypeScript declarations
 pnpm dev                  # Run CLI in dev mode (tsx, no build needed)
 pnpm test                 # Vitest in watch mode
 pnpm test:run             # Single test run
-pnpm test:unit            # Unit tests only (src/**/__tests__/)
-pnpm test:e2e             # E2E tests only (tests/e2e/)
+pnpm test:unit            # Only src/**/__tests__/ — misses tests/unit/
+pnpm test:e2e             # E2E tests only (tests/e2e/); needs `pnpm build` first
 pnpm test:coverage        # Coverage report (v8 provider)
 pnpm lint                 # ESLint check
 pnpm lint:fix             # ESLint auto-fix
@@ -31,7 +31,8 @@ Run a single test file: `pnpm vitest run path/to/file.test.ts`
 
 - **Entry points**: `bin/run.js` (production, uses `dist/`), `bin/dev.js` (development, uses tsx)
 - **Commands**: `src/commands/deploy.ts` (upload + optional ArNS update), `src/commands/upload.ts` (upload only)
-- **Default command**: `interactive` — prompts user to choose a command
+- **No interactive command**: `deploy` decides itself whether to prompt. It prompts only in a TTY with `CI` unset, and otherwise falls back to upload-only when no ArNS name is given.
+- **Vite entries**: `vite.config.ts` lists every command and public module as a library entry, and oclif loads commands from `dist/commands`. A new command needs its own entry there.
 
 ### Configuration Resolution Pattern
 
@@ -39,7 +40,17 @@ All CLI flags are defined in `src/constants/flags.ts` as a single source of trut
 
 ### Upload Flow
 
-`src/workflows/upload-workflow.ts` orchestrates: create signer -> init Turbo client -> handle on-demand funding (with 10% buffer) -> plan the folder upload (`planFolderUpload`: hash, cache lookup, chain lookup with `--incremental`, in-run dedupe, compression) -> credit check priced on the plan (`uploadBytes` + `manifestBytes`) -> upload -> return tx ID. The plan is computed once and reused by `uploadFolder`, so for folder uploads the credit check prices exactly what will be sent, not the whole folder. `--deploy-file` has no plan and prices the file's raw size; `--on-demand` skips the check.
+`src/workflows/upload-workflow.ts` orchestrates: validate `--on-demand` against the signer -> create signer -> resolve Turbo services -> init Turbo client -> plan the folder upload (`planFolderUpload`: hash, cache lookup, chain lookup with `--incremental`, in-run dedupe, compression) -> credit check and, with `--on-demand`, one top-up -> upload -> return tx ID. The plan is computed once and reused by `uploadFolder`, so the credit check prices exactly what will be sent, not the whole folder. `--deploy-file` has no plan and prices the file's raw size.
+
+### Turbo Payments
+
+`src/utils/turbo.ts` composes Turbo SDK primitives rather than reimplementing them. What is load-bearing:
+
+- **Upload and payment services are a pair.** `resolveTurboServices` picks both: `--dev` (named after Turbo's CLI flag) selects the sandbox, and a sandbox `--uploader` or `--payment-url` pulls in the other half. Configuring only the uploader sends balance checks and top-ups to production.
+- **Pricing is per data item.** `quoteUploadWinc` prices each item the plan will send (payload + `DATA_ITEM_HEADER_BYTES`), skipping items within the free limit, which `fetchFreeUploadLimit` reads from the upload service (105 KiB in production, 5 MiB in the sandbox). Turbo's price endpoint does not apply the free tier itself.
+- **Who pays mirrors Turbo's CLI.** By default every wallet in `receivedApprovals` goes into `paidBy` on every data item (files and manifest; it travels as the `x-paid-by` header, not a tag, so ids are unaffected). The payment service tries `[...paidBy, signer]`, so `spendableWinc` is `effectiveBalance` by default, own `winc` with `--ignore-approvals`, and own `winc` plus the named payers' unexpired approvals with `--paid-by`.
+- **On-demand funding happens once, before uploads.** Never pass Turbo's `OnDemandFunding` to per-file `uploadFile` calls: each concurrent worker sees the same shortfall and buys its own top-up, and the cap applies per purchase. `fundShortfall` tops up the plan's shortfall in one transfer. The Turbo client is created with the funding token (not the signer's), since Turbo pays a top-up in the client's token; `ON_DEMAND_TOKENS` maps each signer type to the tokens it can pay with.
+- **Tests fake only the chain.** `UploadWorkflowIo.tokenTools` replaces Turbo's on-chain transfer; everything else runs through the real SDK against MSW (`tests/unit/payments-workflow.test.ts`). The fake transfer is deliberately slow, because an instant one hides the concurrency race.
 
 ### Compression
 
@@ -62,7 +73,7 @@ Four things are load-bearing and easy to break:
 
 ### Signer Types
 
-`src/utils/signer.ts` creates signers: Arweave (base64 JWK -> ArweaveSigner), Ethereum/Polygon/KYVE (hex key -> EthereumSigner), Solana (base58 key -> HexSolanaSigner). Only Solana signers can update ArNS records.
+`src/utils/signer.ts` creates signers: Arweave (base64 JWK -> ArweaveSigner), Ethereum/Polygon (hex key -> EthereumSigner), Solana (base58 key -> HexSolanaSigner). Only Solana signers can update ArNS records.
 
 ### Solana Integration
 
@@ -70,8 +81,9 @@ Four things are load-bearing and easy to break:
 
 ## Testing
 
-- **Unit tests**: Co-located in `src/utils/__tests__/`, use Vitest globals
-- **E2E tests**: `tests/e2e/`, use `@oclif/test` runCommand() with MSW mocking Turbo API
+- **Unit tests**: Most live in `tests/unit/` (uploader, incremental, compression, signer, cache writer); a few are in `src/utils/__tests__/`. Both use Vitest globals. `pnpm test:unit` runs only the `src` set; use `pnpm vitest run tests/unit` or `pnpm test:run` for the rest
+- **E2E tests** run the built CLI from `dist/`, so rebuild before running them. CI runs `pnpm build` and then `pnpm test:run`. Test timeouts are 60s because the first import of `@ar.io/sdk` on a cold cache is slow
+- **E2E layout**: `tests/e2e/`, use `@oclif/test` runCommand() with MSW mocking Turbo API
 - **Fixtures**: `tests/fixtures/` contains test wallet and test-app directory
 - **Mock setup**: `tests/global-setup.ts` (MSW server init), `tests/setup.ts` (handler registration)
 - **Type generation**: `pnpm generate:types` creates types from OpenAPI specs in `tests/fixtures/`
@@ -105,7 +117,7 @@ Package is published as `@ar.io/deploy` on npm under the `@ar.io` org. Uses npm 
 The repo ships a composite GitHub Action (`action.yml`) that external projects use:
 
 ```yaml
-- uses: ar-io/ar-io-deploy@v1.0.0
+- uses: ar-io/ar-io-deploy@v2.0.0
   with:
     deploy-key: ${{ secrets.DEPLOY_KEY }}
     arns-name: myapp
