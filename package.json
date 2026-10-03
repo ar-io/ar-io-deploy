@@ -16,6 +16,7 @@
     "test:run": "vitest run",
     "test:unit": "vitest run src tests/unit",
     "test:e2e": "vitest run tests/e2e",
+    "test:live": "pnpm build && vitest run --config vitest.live.config.ts",
     "test:coverage": "vitest run --coverage",
     "lint": "eslint . --ext .ts",
     "lint:fix": "eslint . --ext .ts --fix",

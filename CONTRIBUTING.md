@@ -98,6 +98,10 @@ docs: update installation instructions
 
 Releases are cut by semantic-release when a branch merges to `main` (or `alpha` for prereleases). The version comes from the commit messages: `fix:` releases a patch, `feat:` a minor version, and `feat!:` or a `BREAKING CHANGE:` footer a major one. There is nothing to bump or record by hand.
 
+### Live tests
+
+`pnpm test:live` runs the built CLI against Turbo's development sandbox, its gateway and public Solana RPCs, with nothing mocked. The uploads are free (within the sandbox's limit) but real and permanent, so they are opt-in and not part of `pnpm test`. Run them before a release, or when you change anything that talks to Turbo or Solana.
+
 ### Pull Request Process
 
 1. Update documentation if needed

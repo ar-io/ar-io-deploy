@@ -16,6 +16,7 @@ pnpm test                 # Vitest in watch mode
 pnpm test:run             # Single test run
 pnpm test:unit            # src/**/__tests__/ and tests/unit/
 pnpm test:e2e             # E2E tests only (tests/e2e/); needs `pnpm build` first
+pnpm test:live            # Real uploads to the Turbo sandbox; see Testing
 pnpm test:coverage        # Coverage report (v8 provider)
 pnpm lint                 # ESLint check
 pnpm lint:fix             # ESLint auto-fix
@@ -92,6 +93,7 @@ Four things are load-bearing and easy to break:
 - **Unit tests**: Most live in `tests/unit/`; a few are in `src/utils/__tests__/`. Both use Vitest globals. Workflow-level tests drive the real Turbo SDK against MSW rather than hand-rolled fakes, and each regression test should fail when its bug is put back.
 - **E2E tests** run the built CLI from `dist/`, so rebuild before running them. CI runs `pnpm build` and then `pnpm test:run`. Test timeouts are 60s because the first import of `@ar.io/sdk` on a cold cache is slow. `vi.mock` does not reach the built CLI; to mock a dependency of a command, run the command class from `src` (see `tests/unit/deploy-arns.test.ts`).
 - **No live network**: `tests/setup.ts` fails any request no MSW handler answers. Mocks must match routes Turbo SDK 2.x actually calls (`tests/mocks/README.md`).
+- **Live tests** (`pnpm test:live`, `tests/live/`, own config `vitest.live.config.ts`) run the built CLI against the real Turbo sandbox, its gateway and public Solana RPCs, and check results through the gateway. Excluded from the default run. Uploads stay under the sandbox's free limit, but they are real and permanent. Run them before a release; mocks cannot tell you the services still behave as the code assumes.
 - **The Action's deploy script** is tested as shipped: `tests/unit/action-script.test.ts` extracts it from `action.yml` and runs it against a stub CLI.
 - **E2E layout**: `tests/e2e/`, use `@oclif/test` runCommand() with MSW mocking Turbo API
 - **Fixtures**: `tests/fixtures/` contains test wallet and test-app directory

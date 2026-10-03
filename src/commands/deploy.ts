@@ -241,11 +241,14 @@ export default class Deploy extends Command {
       ;({ processId } = await ario.getArNSRecord({ name: arnsName }))
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
+      if (/record not found/i.test(message)) {
+        spinner.fail(`ArNS name ${chalk.red(arnsName)} does not exist on ${cluster}`)
+        this.error(`ArNS name [${arnsName}] does not exist on ${cluster}`)
+      }
+
       spinner.fail(`Could not fetch the ArNS record for ${chalk.red(arnsName)}`)
       this.error(
-        /record not found/i.test(message)
-          ? `ArNS name [${arnsName}] does not exist on ${cluster}`
-          : `Could not fetch the ArNS record for [${arnsName}] from ${cluster} (${message}). Check --rpc-url and retry.`,
+        `Could not fetch the ArNS record for [${arnsName}] from ${cluster} (${message}). Check --rpc-url and retry.`,
       )
     }
 

@@ -51,6 +51,8 @@ export default defineConfig({
       // Enable MSW verbose logging by default (can be disabled with MSW_VERBOSE=false)
       MSW_VERBOSE: process.env.MSW_VERBOSE ?? 'true',
     },
+    // Live tests talk to real services; they run only through `pnpm test:live`.
+    exclude: ['**/node_modules/**', '**/dist/**', 'tests/live/**'],
     globalSetup: ['./tests/global-setup.ts'],
     setupFiles: ['./tests/setup.ts'],
     coverage: {
