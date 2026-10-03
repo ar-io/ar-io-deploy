@@ -102,6 +102,16 @@ Releases are cut by semantic-release when a branch merges to `main` (or `alpha` 
 
 `pnpm test:live` runs the built CLI against Turbo's development sandbox, its gateway and public Solana RPCs, with nothing mocked. The uploads are free (within the sandbox's limit) but real and permanent, so they are opt-in and not part of `pnpm test`. Run them before a release, or when you change anything that talks to Turbo or Solana.
 
+The tests that spend tokens (on-demand top-ups, shared credits, ArNS updates) run only when given a funded **devnet** wallet and a devnet ArNS name that wallet controls:
+
+```bash
+ARIO_DEPLOY_LIVE_SOLANA_WALLET=./devnet-id.json \
+ARIO_DEPLOY_LIVE_ARNS_NAME=my-devnet-test-name \
+pnpm test:live
+```
+
+The wallet needs some devnet SOL (a run spends a few hundredths). Without these variables those tests are skipped.
+
 ### Pull Request Process
 
 1. Update documentation if needed
