@@ -154,6 +154,19 @@ runs:
         key: ario-deploy-cache-${{ github.run_id }}-${{ github.run_attempt }}
         restore-keys: ario-deploy-cache-
 
+    # 1.x saved only .ario-deploy/transaction-cache.json, under one fixed key.
+    # A cache is matched on its paths as well as its key, so the step above can
+    # never see it: without this, the first 2.x deploy of a project re-uploads
+    # (and pays for) every file. The CLI still honours 1.x cache entries, so
+    # restoring the old file is enough. Runs only until a 2.x cache exists.
+    - name: Restore a 1.x transaction cache
+      if: inputs.no-dedupe != 'true' && github.event.action != 'closed' && steps.cache-restore.outputs.cache-matched-key == ''
+      uses: actions/cache/restore@v5
+      continue-on-error: true
+      with:
+        path: .ario-deploy/transaction-cache.json
+        key: ario-deploy-transaction-cache
+
     - name: Determine undername
       id: undername
       if: github.event.action != 'closed'
