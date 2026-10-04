@@ -45,7 +45,56 @@ describe(
       ])
 
       expect(error).toBeDefined()
-      expect(error?.message).toMatch(/ario|base-eth/)
+      for (const token of ['ario', 'base-eth', 'base-usdc', 'solana', 'solana-usdc']) {
+        expect(error?.message).toContain(token)
+      }
+    })
+
+    it('should require --max-token-amount with --on-demand', async () => {
+      const { error } = await runCommand([
+        'deploy',
+        '--deploy-folder',
+        './tests/fixtures/test-app',
+        '--sig-type',
+        'ethereum',
+        '--private-key',
+        TEST_ETH_PRIVATE_KEY,
+        '--on-demand',
+        'base-eth',
+      ])
+
+      expect(error?.message).toMatch(/max-token-amount/)
+    })
+
+    it('fails, rather than prompting and exiting 0, when upload has no key and no terminal', async () => {
+      const saved = process.env.DEPLOY_KEY
+      delete process.env.DEPLOY_KEY
+      try {
+        const { error } = await runCommand([
+          'upload',
+          '--deploy-folder',
+          './tests/fixtures/test-app',
+        ])
+
+        expect(error?.message).toMatch(/No upload key provided/)
+        expect(error?.oclif?.exit).not.toBe(0)
+      } finally {
+        if (saved !== undefined) process.env.DEPLOY_KEY = saved
+      }
+    })
+
+    it('should no longer accept kyve as a signer type', async () => {
+      const { error } = await runCommand([
+        'deploy',
+        '--deploy-folder',
+        './tests/fixtures/test-app',
+        '--sig-type',
+        'kyve',
+        '--private-key',
+        TEST_ETH_PRIVATE_KEY,
+      ])
+
+      expect(error?.message).toMatch(/arweave, ethereum, polygon, solana/)
     })
 
     it('should reject invalid dedupe-cache-max-entries', async () => {
@@ -142,7 +191,7 @@ describe(
           expect(result.error).toBeUndefined()
         })
 
-        it('should deploy with ario on-demand', async () => {
+        it('should refuse ario on-demand, which an Arweave key cannot pay with', async () => {
           const result = await runCommand([
             'deploy',
             '--deploy-folder',
@@ -155,10 +204,10 @@ describe(
             '1.5',
           ])
 
-          expect(result.error).toBeUndefined()
+          expect(result.error?.message).toMatch(/not available for arweave upload keys/)
         })
 
-        it('should deploy with base-eth on-demand', async () => {
+        it('should refuse base-eth on-demand, which an Arweave key cannot pay with', async () => {
           const result = await runCommand([
             'deploy',
             '--deploy-folder',
@@ -171,7 +220,7 @@ describe(
             '2.0',
           ])
 
-          expect(result.error).toBeUndefined()
+          expect(result.error?.message).toMatch(/not available for arweave upload keys/)
         })
       })
 
@@ -188,7 +237,7 @@ describe(
           expect(result.error).toBeUndefined()
         })
 
-        it('should deploy with ario on-demand', async () => {
+        it('should refuse ario on-demand, which an Arweave key cannot pay with', async () => {
           const result = await runCommand([
             'deploy',
             '--deploy-file',
@@ -201,10 +250,10 @@ describe(
             '1.0',
           ])
 
-          expect(result.error).toBeUndefined()
+          expect(result.error?.message).toMatch(/not available for arweave upload keys/)
         })
 
-        it('should deploy with base-eth on-demand', async () => {
+        it('should refuse base-eth on-demand, which an Arweave key cannot pay with', async () => {
           const result = await runCommand([
             'deploy',
             '--deploy-file',
@@ -217,7 +266,7 @@ describe(
             '0.3',
           ])
 
-          expect(result.error).toBeUndefined()
+          expect(result.error?.message).toMatch(/not available for arweave upload keys/)
         })
       })
     })

@@ -1,6 +1,4 @@
-import fs from 'node:fs'
-
-import { ARIO, SolanaANTWriteable } from '@ar.io/sdk'
+import { ARIO, SolanaANTReadable, SolanaANTWriteable } from '@ar.io/sdk'
 import { Command } from '@oclif/core'
 import ora from 'ora'
 
@@ -8,10 +6,18 @@ import { type DeployConfig, deployFlagConfigs } from '../constants/flags.js'
 import { promptAdvancedOptions, promptUpdateArns } from '../prompts/arns.js'
 import { getWalletConfig } from '../prompts/wallet.js'
 import { chalk } from '../utils/chalk.js'
-import { extractFlags, resolveConfig } from '../utils/config-resolver.js'
-import { deployKeyFromPrivateKey, deployKeyFromWalletFile } from '../utils/deploy-key.js'
-import { type DisplayRow, formatDisplayRows, formatUploadError } from '../utils/display.js'
-import { expandPath } from '../utils/path.js'
+import {
+  canPrompt,
+  isPromptCancel,
+  MISSING_UPLOAD_KEY,
+  reportFailure,
+  resolveKey,
+  uploadResultRows,
+  uploadWorkflowConfig,
+  workflowIo,
+} from '../utils/command-helpers.js'
+import { defaultedFlags, extractFlags, resolveConfig } from '../utils/config-resolver.js'
+import { type DisplayRow, formatDisplayRows } from '../utils/display.js'
 import {
   clusterProgramIds,
   createArioRpc,
@@ -19,8 +25,25 @@ import {
   createSolanaArnsSigner,
   type SolanaCluster,
 } from '../utils/solana.js'
-import { validateIncrementalDedupe } from '../utils/validators.js'
+import { resolveTurboServices } from '../utils/turbo.js'
 import { runUploadWorkflow } from '../workflows/upload-workflow.js'
+
+/** Whether the upload goes to Turbo's development sandbox. */
+function usesTurboSandbox(config: {
+  dev?: boolean
+  'payment-url'?: string
+  uploader?: string
+}): boolean {
+  try {
+    return resolveTurboServices({
+      dev: config.dev,
+      paymentUrl: config['payment-url'],
+      uploadUrl: config.uploader,
+    }).development
+  } catch {
+    return false // An invalid URL is refused by the upload workflow itself.
+  }
+}
 
 export default class Deploy extends Command {
   static override args = {}
@@ -39,25 +62,25 @@ export default class Deploy extends Command {
   static override flags = extractFlags(deployFlagConfigs)
 
   public async run(): Promise<void> {
-    try {
-      const { flags } = await this.parse(Deploy)
+    const { flags, metadata } = await this.parse(Deploy)
 
+    try {
       const hasArnsName = Boolean(flags['arns-name'])
       const explicitUseArns = Boolean(flags['use-arns'])
-      const canPrompt = Boolean(process.stdout.isTTY) && !process.env.CI
+      const promptable = canPrompt()
 
       // Decide whether to update ArNS and whether to run interactive prompts.
-      // When no ArNS details are supplied we ask by default (in a TTY); the
-      // resolveConfig pass below then prompts for the name and other missing
-      // values. A non-interactive environment falls back to upload-only.
+      // When no ArNS details are supplied we ask by default (in a terminal);
+      // the resolveConfig pass below then prompts for the name and other
+      // missing values. Anywhere else, deploy falls back to upload-only.
       let useArns = hasArnsName || explicitUseArns
       let interactive = false
 
       if (hasArnsName) {
         interactive = false
       } else if (explicitUseArns) {
-        interactive = canPrompt
-      } else if (canPrompt) {
+        interactive = promptable
+      } else if (promptable) {
         useArns = await promptUpdateArns()
         interactive = useArns
       }
@@ -75,289 +98,239 @@ export default class Deploy extends Command {
         }
       }
 
-      const baseConfig = (await resolveConfig<typeof deployFlagConfigs>(deployFlagConfigs, flags, {
+      const baseConfig = (await resolveConfig(deployFlagConfigs, flags, {
+        defaulted: defaultedFlags(metadata),
         interactive,
       })) as DeployConfig
 
-      let walletConfig: { privateKey?: string; wallet?: string } = {
-        privateKey: baseConfig['private-key'],
-        wallet: baseConfig.wallet,
-      }
-
-      const shouldPromptWallet =
-        canPrompt &&
-        !baseConfig.wallet &&
-        !baseConfig['private-key'] &&
+      let uploadKey = { privateKey: baseConfig['private-key'], wallet: baseConfig.wallet }
+      if (
+        promptable &&
+        !uploadKey.wallet &&
+        !uploadKey.privateKey &&
         (interactive || !process.env.DEPLOY_KEY?.trim())
-
-      if (shouldPromptWallet) {
-        const config = await getWalletConfig({
+      ) {
+        const answer = await getWalletConfig({
           envVar: 'DEPLOY_KEY',
           label: 'upload key',
           purpose: 'pays for the upload',
         })
-        walletConfig = {
-          privateKey: config.privateKey,
-          wallet: config.wallet,
-        }
+        uploadKey = { privateKey: answer.privateKey, wallet: answer.wallet }
       }
 
       // ArNS authority key — separate from the upload key. Always a Solana key
-      // that controls the ArNS name and signs the ANT record update. Only needed
-      // when updating ArNS.
-      let arnsKeyConfig: { privateKey?: string; wallet?: string } = {
+      // that controls the ArNS name and signs the ANT record update.
+      let arnsKey = {
         privateKey: baseConfig['arns-private-key'],
         wallet: baseConfig['arns-wallet'],
       }
-
-      const shouldPromptArnsKey =
-        canPrompt &&
+      if (
+        promptable &&
         useArns &&
-        !arnsKeyConfig.wallet &&
-        !arnsKeyConfig.privateKey &&
+        !arnsKey.wallet &&
+        !arnsKey.privateKey &&
         (interactive || !process.env.ARNS_KEY?.trim())
-
-      if (shouldPromptArnsKey) {
-        const config = await getWalletConfig({
+      ) {
+        const answer = await getWalletConfig({
           envVar: 'ARNS_KEY',
           fileDefault: './arns-wallet.json',
           label: 'ArNS authority key',
           purpose: 'controls the ArNS name and signs the record update',
         })
-        arnsKeyConfig = {
-          privateKey: config.privateKey,
-          wallet: config.wallet,
-        }
+        arnsKey = { privateKey: answer.privateKey, wallet: answer.wallet }
       }
 
-      let advancedOptions:
-        | {
-            cluster: string
-            maxTokenAmount?: string
-            onDemand?: string
-            ttlSeconds: string
-            undername: string
-          }
-        | undefined
-
-      if (interactive) {
-        const options = await promptAdvancedOptions()
-        advancedOptions = options || undefined
-      }
-
-      const effectiveCacheMaxEntries = baseConfig['no-dedupe']
-        ? 0
-        : baseConfig['dedupe-cache-max-entries']
-
-      /*
-       * `--no-dedupe` is refused by oclif exclusivity; this catches the other
-       * way of saying the same thing, so both spellings fail identically
-       * instead of one being silently honoured.
-       */
-      const incrementalConflict = validateIncrementalDedupe(
-        baseConfig.incremental,
-        effectiveCacheMaxEntries,
-      )
-      if (incrementalConflict !== true) {
-        this.error(incrementalConflict)
-      }
-
+      const advanced = interactive ? await promptAdvancedOptions(baseConfig['sig-type']) : null
       const deployConfig: DeployConfig = {
-        'arns-name': baseConfig['arns-name'],
-        'arns-private-key': arnsKeyConfig.privateKey,
-        'arns-wallet': arnsKeyConfig.wallet,
-        cluster: advancedOptions?.cluster || baseConfig.cluster,
-        compress: baseConfig.compress,
-        'compress-exclude': baseConfig['compress-exclude'],
-        'dedupe-cache-max-entries': effectiveCacheMaxEntries,
-        'deploy-file': baseConfig['deploy-file'],
-        'deploy-folder': baseConfig['deploy-folder'],
-        'fallback-file': baseConfig['fallback-file'],
-        incremental: baseConfig.incremental,
-        'incremental-gateway': baseConfig['incremental-gateway'],
-        'max-token-amount': advancedOptions?.maxTokenAmount || baseConfig['max-token-amount'],
-        'no-dedupe': baseConfig['no-dedupe'],
-        'on-demand': advancedOptions?.onDemand || baseConfig['on-demand'],
-        'private-key': walletConfig.privateKey,
-        'rpc-url': baseConfig['rpc-url'],
-        'sig-type': baseConfig['sig-type'],
-        'ttl-seconds': advancedOptions?.ttlSeconds || baseConfig['ttl-seconds'],
-        undername: advancedOptions?.undername || baseConfig.undername,
-        uploader: baseConfig.uploader,
+        ...baseConfig,
+        cluster: advanced?.cluster || baseConfig.cluster,
+        'max-token-amount': advanced?.maxTokenAmount || baseConfig['max-token-amount'],
+        'on-demand': advanced?.onDemand || baseConfig['on-demand'],
+        'ttl-seconds': advanced?.ttlSeconds || baseConfig['ttl-seconds'],
+        undername: advanced?.undername || baseConfig.undername,
         'use-arns': useArns,
-        wallet: walletConfig.wallet,
+      }
+
+      const config = uploadWorkflowConfig(deployConfig)
+      if (typeof config === 'string') {
+        this.error(config)
       }
 
       if (interactive) {
         this.log('')
       }
 
-      // Resolve a deploy key from a wallet file, a private-key string, or an
-      // environment variable. Used for both the upload key and the (Solana)
-      // ArNS authority key — they are independent inputs.
-      const resolveKey = (key: {
-        envVar: string
-        missing: string
-        privateKey?: string
-        sigType: string
-        walletPath?: string
-      }): string => {
-        if (key.walletPath) {
-          const resolvedPath = expandPath(key.walletPath)
-          if (!fs.existsSync(resolvedPath)) {
-            this.error(`Wallet file [${key.walletPath}] does not exist`)
-          }
-
-          return deployKeyFromWalletFile(key.sigType, fs.readFileSync(resolvedPath, 'utf8'))
-        }
-
-        if (key.privateKey) {
-          return deployKeyFromPrivateKey(key.sigType, key.privateKey)
-        }
-
-        const envValue = process.env[key.envVar]?.trim()
-        if (envValue) {
-          return envValue
-        }
-
-        return this.error(key.missing)
-      }
-
+      // Every key is read and validated before anything is paid for.
       const deployKey = resolveKey({
         envVar: 'DEPLOY_KEY',
-        missing:
-          'No upload key provided. Use --wallet, --private-key, or set DEPLOY_KEY (the key that pays for the upload).',
-        privateKey: deployConfig['private-key'],
-        sigType: deployConfig['sig-type'],
-        walletPath: deployConfig.wallet,
+        missing: MISSING_UPLOAD_KEY,
+        privateKey: uploadKey.privateKey,
+        sigType: config['sig-type'],
+        walletPath: uploadKey.wallet,
       })
-
-      // ArNS authority key is always a Solana key, independent of the upload key.
-      const arnsAuthorityKey = deployConfig['use-arns']
+      const arnsAuthorityKey = useArns
         ? resolveKey({
             envVar: 'ARNS_KEY',
             missing:
               'No ArNS authority key provided. Use --arns-wallet, --arns-private-key, or set ARNS_KEY (the Solana key that controls the ArNS name).',
-            privateKey: deployConfig['arns-private-key'],
+            privateKey: arnsKey.privateKey,
             sigType: 'solana',
-            walletPath: deployConfig['arns-wallet'],
+            walletPath: arnsKey.wallet,
           })
-        : ''
+        : undefined
 
       this.log(chalk.bold(chalk.cyan('\nStarting deployment...\n')))
-      try {
-        if (!deployConfig['use-arns']) {
-          const { transactionId: txOrManifestId } = await runUploadWorkflow(
-            deployKey,
-            deployConfig,
-            {
-              error: (msg) => this.error(msg),
-            },
-          )
 
-          this.log('')
+      if (useArns && deployConfig.cluster === 'mainnet' && usesTurboSandbox(config)) {
+        this.warn(
+          'Uploading to the Turbo development sandbox but updating a mainnet ArNS name: mainnet gateways may not serve sandbox uploads.',
+        )
+      }
 
-          const rows: DisplayRow[] = [['Tx ID', chalk.green(txOrManifestId)]]
-          if (deployConfig.uploader) {
-            rows.push(['Bundler service', chalk.cyan(deployConfig.uploader)])
-          }
+      const arns = arnsAuthorityKey
+        ? await this.prepareArns(deployConfig, arnsAuthorityKey)
+        : undefined
 
-          rows.push(['Arweave URL', chalk.yellow(`https://turbo-gateway.com/${txOrManifestId}`)])
+      const result = await runUploadWorkflow(deployKey, config, workflowIo)
 
-          this.log(chalk.bold(chalk.green('Deployment Successful!')))
-          this.log(formatDisplayRows(rows))
+      // Printed before the ArNS update, so the id survives a failed update.
+      this.log('')
+      this.log(formatDisplayRows(uploadResultRows(result, config)))
 
-          return
-        }
+      if (arns) {
+        await arns.update(result.transactionId)
+      }
 
-        const cluster = deployConfig.cluster as SolanaCluster
-        const rpcUrl = deployConfig['rpc-url']
-        const arnsName = deployConfig['arns-name']
-        if (!arnsName) {
-          this.error('--use-arns requires --arns-name')
-        }
+      this.log('')
+      this.log(chalk.bold(chalk.green('Deployment Successful!')))
+    } catch (error) {
+      if (isPromptCancel(error)) {
+        this.log(chalk.yellow('\n\nDeployment cancelled'))
+        this.exit(130)
+      }
 
-        const spinner = ora()
+      reportFailure(this, error, 'Deployment failed')
+    }
+  }
 
-        spinner.start('Initializing ARIO')
+  /**
+   * Everything about the ArNS update that can be checked before the upload is
+   * paid for: the name exists, the key decodes, and the key appears to control
+   * the name. Returns the update to run once the upload has an id.
+   */
+  private async prepareArns(
+    config: DeployConfig,
+    authorityKey: string,
+  ): Promise<{ update: (transactionId: string) => Promise<void> }> {
+    const arnsName = config['arns-name']
+    if (!arnsName) {
+      this.error('--use-arns requires --arns-name')
+    }
 
-        const programIds = clusterProgramIds(cluster)
-        const rpc = createArioRpc(cluster, rpcUrl)
-        const ario = ARIO.init({ rpc, ...programIds })
+    const cluster = config.cluster as SolanaCluster
+    const rpcUrl = config['rpc-url']
+    const spinner = ora()
 
-        spinner.succeed('ARIO initialized')
+    spinner.start(`Fetching ArNS record for ${chalk.yellow(arnsName)}`)
+    const programIds = clusterProgramIds(cluster)
+    const rpc = createArioRpc(cluster, rpcUrl)
+    const ario = ARIO.init({ rpc, ...programIds })
 
-        spinner.start(`Fetching ArNS record for ${chalk.yellow(arnsName)}`)
-        const arnsNameRecord = await ario.getArNSRecord({ name: arnsName }).catch(() => {
-          spinner.fail(`ArNS name ${chalk.red(arnsName)} does not exist`)
-          this.error(`ArNS name [${arnsName}] does not exist`)
-        })
+    let processId: string
+    try {
+      ;({ processId } = await ario.getArNSRecord({ name: arnsName }))
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      if (/record not found/i.test(message)) {
+        spinner.fail(`ArNS name ${chalk.red(arnsName)} does not exist on ${cluster}`)
+        this.error(`ArNS name [${arnsName}] does not exist on ${cluster}`)
+      }
 
-        spinner.succeed(`ArNS record fetched for ${chalk.green(arnsName)}`)
+      spinner.fail(`Could not fetch the ArNS record for ${chalk.red(arnsName)}`)
+      this.error(
+        `Could not fetch the ArNS record for [${arnsName}] from ${cluster} (${message}). Check --rpc-url and retry.`,
+      )
+    }
 
-        const { transactionId: txOrManifestId } = await runUploadWorkflow(deployKey, deployConfig, {
-          error: (msg) => this.error(msg),
-        })
+    const signer = await createSolanaArnsSigner(authorityKey)
+    spinner.succeed(`ArNS record fetched for ${chalk.green(arnsName)}`)
 
-        this.log('')
+    /*
+     * A key that controls neither the ANT nor a controller slot is refused
+     * here, before the upload is paid for: the program would refuse the update
+     * afterwards anyway. The owner is the last owner the ANT program recorded,
+     * which a fresh transfer can lag, so --skip-arns-check downgrades the
+     * refusal to a warning. If the ANT cannot be read at all, the check cannot
+     * decide, and the update itself remains the real check.
+     */
+    const antArgs = {
+      processId,
+      rpc,
+      ...(programIds.antProgramId ? { antProgramId: programIds.antProgramId } : {}),
+    }
+    let authority: { controllers: string[]; owner: string } | undefined
+    try {
+      const reader = new SolanaANTReadable(antArgs)
+      const [owner, controllers] = await Promise.all([reader.getOwner(), reader.getControllers()])
+      authority = { controllers, owner }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      spinner.warn(
+        `Could not read the ANT for ${arnsName} (${message}); not checking who controls it`,
+      )
+    }
 
+    if (
+      authority &&
+      signer.address !== authority.owner &&
+      !authority.controllers.includes(signer.address)
+    ) {
+      const problem = `The ArNS key ${signer.address} is neither the owner (${authority.owner}) nor a controller of ${arnsName}`
+      if (!config['skip-arns-check']) {
+        spinner.fail('ArNS key does not control the name')
+        this.error(
+          `${problem}, so the record update would be refused. Nothing was uploaded. Use the key that owns or controls the name, or pass --skip-arns-check if it changed hands very recently.`,
+        )
+      }
+
+      spinner.warn(`${problem}; continuing because of --skip-arns-check`)
+    }
+
+    return {
+      update: async (transactionId: string) => {
         spinner.start('Updating ANT record')
-        const signer = await createSolanaArnsSigner(arnsAuthorityKey)
         const ant = new SolanaANTWriteable({
-          processId: arnsNameRecord.processId,
-          rpc,
+          ...antArgs,
           rpcSubscriptions: createArioRpcSubscriptions(cluster, rpcUrl),
           signer,
-          ...(programIds.antProgramId ? { antProgramId: programIds.antProgramId } : {}),
         })
-
         const recordParams = {
-          transactionId: txOrManifestId,
-          ttlSeconds: Number.parseInt(deployConfig['ttl-seconds'], 10),
+          transactionId,
+          ttlSeconds: Number.parseInt(config['ttl-seconds'], 10),
         }
 
-        await (deployConfig.undername === '@'
-          ? ant.setBaseNameRecord(recordParams)
-          : ant.setUndernameRecord({ ...recordParams, undername: deployConfig.undername }))
+        try {
+          await (config.undername === '@'
+            ? ant.setBaseNameRecord(recordParams)
+            : ant.setUndernameRecord({ ...recordParams, undername: config.undername }))
+        } catch (error) {
+          spinner.fail('ANT record update failed')
+          const message = error instanceof Error ? error.message : String(error)
+          throw new Error(
+            `The upload succeeded (Tx ID ${transactionId}) but the ArNS update failed: ${message}`,
+          )
+        }
 
         spinner.succeed('ANT record updated')
-
-        const rows: DisplayRow[] = [['Tx ID', chalk.green(txOrManifestId)]]
-        if (deployConfig.uploader) {
-          rows.push(['Bundler service', chalk.cyan(deployConfig.uploader)])
-        }
-
-        rows.push(
+        const rows: DisplayRow[] = [
           ['ArNS Name', chalk.yellow(arnsName)],
-          ['Undername', chalk.yellow(deployConfig.undername)],
-          ['ANT', chalk.cyan(arnsNameRecord.processId)],
+          ['Undername', chalk.yellow(config.undername)],
+          ['ANT', chalk.cyan(processId)],
           ['Cluster', chalk.gray(cluster)],
-          ['TTL Seconds', chalk.blue(deployConfig['ttl-seconds'])],
-          ['Arweave URL', chalk.yellow(`https://turbo-gateway.com/${txOrManifestId}`)],
-        )
-
-        this.log(chalk.bold(chalk.green('Deployment Successful!')))
+          ['TTL Seconds', chalk.blue(config['ttl-seconds'])],
+        ]
         this.log(formatDisplayRows(rows))
-      } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : String(error)
-        const normalizedError = errorMessage.startsWith('Upload failed:')
-          ? errorMessage.replace(/^Upload failed:\s*/, '')
-          : errorMessage
-
-        if (errorMessage.startsWith('Upload failed:') && !process.env.CI && process.stdout.isTTY) {
-          this.log(`\n${formatUploadError(normalizedError, 'Deployment failed')}`)
-          this.exit(1)
-        }
-
-        this.error(chalk.red(`Deployment failed: ${errorMessage}`))
-      }
-    } catch (error) {
-      if (error instanceof Error && error.name === 'ExitPromptError') {
-        this.log(chalk.yellow('\n\nDeployment cancelled'))
-        this.exit(0)
-      }
-
-      throw error
+      },
     }
   }
 }

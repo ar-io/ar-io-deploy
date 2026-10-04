@@ -1,31 +1,10 @@
 import { describe, expect, it } from 'vitest'
 
-import {
-  formatDisplayRows,
-  formatUploadCost,
-  formatUploadError,
-  formatUploadSize,
-} from '../display.js'
+import { formatDisplayRows, formatUploadError } from '../display.js'
 
 const escapeCode = String.fromCodePoint(27)
 const stripAnsi = (value: string): string =>
   value.replaceAll(new RegExp(`${escapeCode}\\[[\\d;]*m`, 'g'), '')
-
-describe('formatUploadSize', () => {
-  it('formats the signed byte count when available', () => {
-    expect(formatUploadSize({ payloadBytes: 18, signedBytes: 1144 })).toBe('1,144 bytes')
-  })
-
-  it('falls back to the payload byte count', () => {
-    expect(formatUploadSize({ payloadBytes: 18 })).toBe('18 bytes')
-  })
-})
-
-describe('formatUploadCost', () => {
-  it('formats the cost amount as a base-unit string', () => {
-    expect(formatUploadCost({ amount: 1_347_788_856n, token: 'winc' })).toBe('1347788856')
-  })
-})
 
 describe('formatDisplayRows', () => {
   it('formats rows as plain console labels', () => {

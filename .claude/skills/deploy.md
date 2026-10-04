@@ -51,7 +51,8 @@ ArNS names give you a permanent URL like `https://myapp.ar.io`.
 Uploads to Arweave cost Turbo credits. Two options:
 
 - **Pre-fund**: Buy Turbo credits at https://turbo.ardrive.io with crypto or credit card
-- **On-demand**: Use `--on-demand ario` flag to auto-convert ARIO tokens during deploy (requires ARIO in your wallet)
+- **On-demand**: `--on-demand <token> --max-token-amount <n>` tops up once during deploy if credits run short. The token must match the upload key: `ario`, `solana`, `solana-usdc` with `--sig-type solana`; `base-eth`, `base-usdc` with an Ethereum/Polygon key. Arweave keys cannot top up on demand.
+- **Shared credits**: credits other wallets shared with the upload key are used automatically (`--paid-by`, `--ignore-approvals` to control)
 
 ### 4. Set Up Environment Variables
 
@@ -97,7 +98,9 @@ Ask the user:
 | ethereum          | Hex private key (0x...)      | Needs separate `ARNS_KEY` |
 | solana            | Base58 secret key or id.json | Can also be `ARNS_KEY`    |
 
-**ArNS updates always need a Solana key** — either as `ARNS_KEY` or the same key as `DEPLOY_KEY` when using `--sig-type solana`.
+**ArNS updates always need a Solana key** in `ARNS_KEY` (or `--arns-wallet` / `--arns-private-key`). It is never taken from `DEPLOY_KEY`: to use one Solana wallet for both, set both.
+
+Requires Node.js 20.18 or later.
 
 ### Step 3: Run the deploy
 
@@ -116,13 +119,13 @@ ario-deploy deploy --deploy-folder ./dist --arns-name <NAME> --wallet ./wallet.j
 **With ArNS update (same Solana key for both):**
 
 ```bash
-DEPLOY_KEY=<solana-key> ARNS_KEY=<solana-key> ario-deploy deploy --deploy-folder ./dist --arns-name <NAME>
+DEPLOY_KEY=<solana-key> ARNS_KEY=<solana-key> ario-deploy deploy --deploy-folder ./dist --arns-name <NAME> --sig-type solana
 ```
 
 **With on-demand payment (auto-fund if balance is low):**
 
 ```bash
-ario-deploy deploy --deploy-folder ./dist --arns-name <NAME> --wallet ./wallet.json --arns-wallet ./arns-id.json --on-demand ario --max-token-amount 1.5
+ario-deploy deploy --deploy-folder ./dist --arns-name <NAME> --sig-type solana --wallet ./id.json --arns-wallet ./arns-id.json --on-demand ario --max-token-amount 1.5
 ```
 
 ### Step 4: Report results
@@ -148,8 +151,11 @@ After successful deployment, report:
 | `--undername, -u`       | Subdomain/undername                                          | `@`                         |
 | `--ttl-seconds, -t`     | TTL for ArNS record                                          | `60`                        |
 | `--cluster, -p`         | Solana cluster                                               | `mainnet`                   |
-| `--on-demand`           | Auto-fund token type                                         | —                           |
-| `--max-token-amount`    | Max spend for on-demand                                      | —                           |
+| `--skip-arns-check`     | Update ArNS even if the key does not appear to control it    | `false`                     |
+| `--on-demand`           | Top-up token (must match the upload key)                     | —                           |
+| `--max-token-amount`    | Max spend for the whole deploy (required with on-demand)     | —                           |
+| `--paid-by`             | Wallets whose shared credits pay                             | all that shared             |
+| `--dev`                 | Turbo development sandbox (upload + payment)                 | `false`                     |
 | `--no-dedupe`           | Skip deduplication cache                                     | `false`                     |
 | `--compress`            | Compress uploads: `gzip`, `br` or `none`                     | `none`                      |
 | `--compress-exclude`    | Globs to upload uncompressed                                 | —                           |
@@ -195,7 +201,7 @@ jobs:
           npm run build
 
       - name: Deploy to AR.IO
-        uses: ar-io/ar-io-deploy@v1.0.0
+        uses: ar-io/ar-io-deploy@v2.0.0
         with:
           deploy-key: ${{ secrets.DEPLOY_KEY }}
           arns-key: ${{ secrets.ARNS_KEY }}
@@ -207,7 +213,7 @@ For PR previews:
 
 ```yaml
 - name: Deploy Preview
-  uses: ar-io/ar-io-deploy@v1.0.0
+  uses: ar-io/ar-io-deploy@v2.0.0
   with:
     deploy-key: ${{ secrets.DEPLOY_KEY }}
     arns-key: ${{ secrets.ARNS_KEY }}
@@ -224,7 +230,7 @@ For PR previews:
 | "DEPLOY_KEY not set"                           | Set `DEPLOY_KEY` env var or use `--wallet`/`--private-key`                                                                                                 |
 | "deploy-folder does not exist"                 | Build first (`npm run build`) or specify correct path                                                                                                      |
 | "ArNS name does not exist"                     | Verify the name exists at https://arns.ar.io                                                                                                               |
-| "Insufficient Turbo Credits"                   | Use `--on-demand ario` or fund wallet at https://turbo.ardrive.io                                                                                          |
+| "Insufficient Turbo Credits"                   | Fund the upload wallet at https://turbo.ardrive.io, or use `--on-demand` with a token the key can pay in. On the sandbox, pass `--dev`                     |
 | Pages show garbage after a `--compress` deploy | The gateway served an unindexed item without `Content-Encoding` (needs ar-io-node #964/#966). Use a gateway with the fix, or redeploy without `--compress` |
 | ArNS update fails                              | Ensure `ARNS_KEY` or `--arns-wallet` is set with a Solana key that controls the ArNS name                                                                  |
 

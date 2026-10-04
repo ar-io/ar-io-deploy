@@ -7,17 +7,28 @@
  */
 
 /**
+ * Shared by every prompt in one resolution, so related prompts can agree:
+ * the file-or-folder question is asked once, and is not asked at all when the
+ * user already named one of them.
+ */
+export interface PromptContext {
+  /** Prompts' memoized answers, keyed by whatever the prompts agree on. */
+  memo: Map<string, Promise<unknown>>
+  /** Flags the user typed (as opposed to oclif filling in a default). */
+  provided: ReadonlySet<string>
+}
+
+/**
  * Configuration for a single flag with its associated prompt
  */
 export type FlagConfig<T = any, F = any> = {
   /** The oclif flag definition */
   flag: F
-  /** Optional prompt function to get the value interactively */
-  prompt?: () => Promise<T>
-  /** Transform function to apply to the resolved value */
-  transform?: (value: T) => T
-  /** Whether this flag triggers interactive mode when missing */
-  triggersInteractive?: boolean
+  /**
+   * Optional prompt for the value in interactive mode. Returning nothing
+   * keeps the flag's default.
+   */
+  prompt?: (context: PromptContext) => Promise<T | undefined | void>
 }
 
 /**
@@ -37,79 +48,65 @@ export type ResolvedConfig<T extends FlagConfigMap> = {
  * Options for resolveConfig
  */
 export interface ResolveConfigOptions {
+  /**
+   * Flags whose value oclif filled in from a default. oclif applies defaults
+   * before the command sees its flags, so without this every defaulted flag
+   * looks typed by the user and its prompt never runs. Take it from
+   * `this.parse()`'s `metadata.flags[name].setFromDefault`.
+   */
+  defaulted?: ReadonlySet<string>
   /** Whether to run in interactive mode */
   interactive?: boolean
-  /** Custom logic to determine if interactive mode should be enabled */
-  shouldBeInteractive?: (parsedFlags: Record<string, any>) => boolean
+}
+
+/** Flag names oclif filled in from defaults, from `this.parse()` metadata. */
+export function defaultedFlags(metadata: {
+  flags: Record<string, { setFromDefault?: boolean } | undefined>
+}): Set<string> {
+  return new Set(
+    Object.entries(metadata.flags)
+      .filter(([, flag]) => flag?.setFromDefault)
+      .map(([name]) => name),
+  )
+}
+
+function isSet(value: unknown): boolean {
+  return value !== undefined && value !== null && value !== ''
 }
 
 /**
- * Resolves configuration by combining parsed CLI flags with interactive prompts
+ * Resolves configuration by combining parsed CLI flags with interactive prompts.
+ *
+ * A flag the user typed always wins. In interactive mode every other flag
+ * with a prompt is asked; otherwise it keeps oclif's default.
  *
  * @param flagConfigs - Map of flag names to their configurations
  * @param parsedFlags - Parsed flags from this.parse()
- * @param options - Resolution options
+ * @param options - Interactive mode and which flags were defaulted
  * @returns Fully resolved configuration object
- *
- * @example
- * ```typescript
- * const config = await resolveConfig(
- *   {
- *     arnsName: {
- *       flag: globalFlags.arnsName,
- *       prompt: promptArnsName,
- *       triggersInteractive: true,
- *     },
- *     wallet: {
- *       flag: globalFlags.wallet,
- *       prompt: async () => (await getWalletConfig()).wallet,
- *     },
- *   },
- *   flags,
- *   {
- *     shouldBeInteractive: (flags) => !flags['arns-name'],
- *   }
- * )
- * ```
  */
 export async function resolveConfig<T extends FlagConfigMap>(
   flagConfigs: T,
   parsedFlags: Record<string, any>,
   options: ResolveConfigOptions = {},
 ): Promise<ResolvedConfig<T>> {
-  const { interactive, shouldBeInteractive } = options
-
-  // Determine if we should run in interactive mode
-  const isInteractive =
-    interactive ?? (shouldBeInteractive ? shouldBeInteractive(parsedFlags) : false)
+  const defaulted = options.defaulted ?? new Set<string>()
+  const provided = new Set(
+    Object.keys(flagConfigs).filter((key) => isSet(parsedFlags[key]) && !defaulted.has(key)),
+  )
+  const context: PromptContext = { memo: new Map(), provided }
 
   const resolved: Record<string, any> = {}
-
   for (const [key, config] of Object.entries(flagConfigs)) {
-    const flagValue = parsedFlags[key]
-
-    // If value exists from flags, use it
-    if (flagValue !== undefined && flagValue !== null && flagValue !== '') {
-      resolved[key] = config.transform ? config.transform(flagValue) : flagValue
-      continue
+    if (!provided.has(key) && options.interactive && config.prompt) {
+      const answer = await config.prompt(context)
+      if (answer !== undefined) {
+        resolved[key] = answer
+        continue
+      }
     }
 
-    // If interactive mode and prompt exists, use prompt
-    if (isInteractive && config.prompt) {
-      const promptValue = await config.prompt()
-      resolved[key] = config.transform ? config.transform(promptValue) : promptValue
-      continue
-    }
-
-    // Otherwise use the flag's default value (if any)
-    const defaultValue = config.flag.default
-    if (typeof defaultValue === 'function') {
-      resolved[key] = await defaultValue({})
-    } else if (defaultValue === undefined) {
-      resolved[key] = flagValue // May be undefined
-    } else {
-      resolved[key] = defaultValue
-    }
+    resolved[key] = isSet(parsedFlags[key]) ? parsedFlags[key] : config.flag.default
   }
 
   return resolved as ResolvedConfig<T>

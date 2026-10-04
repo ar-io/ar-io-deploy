@@ -39,7 +39,25 @@ describe('solana deploy key parsing', () => {
     expect(() => solanaDeployKeyFromFile('[1, 2, 3]')).toThrow(/64-byte/)
   })
 
-  it('trims a base58 private key string', () => {
-    expect(solanaDeployKeyFromString('  abc123  ')).toBe('abc123')
+  const secretKey = bs58.encode(Buffer.alloc(64, 7))
+
+  it('accepts a base58 64-byte secret key, trimmed', () => {
+    expect(solanaDeployKeyFromString(`  ${secretKey}\n`)).toBe(secretKey)
+  })
+
+  it('accepts an id.json byte array pasted as a string', () => {
+    expect(solanaDeployKeyFromString(JSON.stringify(Array.from({ length: 64 }, () => 7)))).toBe(
+      secretKey,
+    )
+  })
+
+  it('refuses a public address, which is 32 bytes, before anything is paid for', () => {
+    expect(() => solanaDeployKeyFromString(bs58.encode(Buffer.alloc(32, 7)))).toThrow(
+      /64-byte secret key, got 32 bytes/,
+    )
+  })
+
+  it('refuses text that is not base58', () => {
+    expect(() => solanaDeployKeyFromString('not-base58!')).toThrow(/Invalid Solana key/)
   })
 })

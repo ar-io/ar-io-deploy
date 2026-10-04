@@ -5,7 +5,7 @@ import { solanaDeployKeyFromFile, solanaDeployKeyFromString } from './solana.js'
  * throughout the CLI, based on the signer type:
  * - arweave: base64-encoded JWK JSON
  * - solana: base58 secret key derived from a solana-keygen id.json byte array
- * - ethereum/polygon/kyve: trimmed hex private key
+ * - ethereum/polygon: trimmed hex private key
  */
 export function deployKeyFromWalletFile(sigType: string, content: string): string {
   if (sigType === 'arweave') {

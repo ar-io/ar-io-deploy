@@ -4,22 +4,12 @@ import { defineConfig } from 'vitest/config'
 export default defineConfig({
   build: {
     lib: {
+      // The CLI's surface: oclif loads every file under dist/commands, and
+      // `main` exports `run`. Everything else is bundled into chunks.
       entry: {
         index: resolve(__dirname, 'src/index.ts'),
         'commands/deploy': resolve(__dirname, 'src/commands/deploy.ts'),
         'commands/upload': resolve(__dirname, 'src/commands/upload.ts'),
-        'workflows/upload-workflow': resolve(__dirname, 'src/workflows/upload-workflow.ts'),
-        'constants/flags': resolve(__dirname, 'src/constants/flags.ts'),
-        'prompts/arns': resolve(__dirname, 'src/prompts/arns.ts'),
-        'prompts/deployment': resolve(__dirname, 'src/prompts/deployment.ts'),
-        'prompts/wallet': resolve(__dirname, 'src/prompts/wallet.ts'),
-        'utils/config-resolver': resolve(__dirname, 'src/utils/config-resolver.ts'),
-        'utils/constants': resolve(__dirname, 'src/utils/constants.ts'),
-        'utils/path': resolve(__dirname, 'src/utils/path.ts'),
-        'utils/validators': resolve(__dirname, 'src/utils/validators.ts'),
-        'utils/signer': resolve(__dirname, 'src/utils/signer.ts'),
-        'utils/uploader': resolve(__dirname, 'src/utils/uploader.ts'),
-        'types/index': resolve(__dirname, 'src/types/index.ts'),
       },
       formats: ['es'],
       fileName: (format, entryName) => `${entryName}.js`,
@@ -34,6 +24,7 @@ export default defineConfig({
         'bs58',
         'mime-types',
         'ora',
+        'p-limit',
         /^node:.*/,
       ],
       output: {
@@ -60,6 +51,8 @@ export default defineConfig({
       // Enable MSW verbose logging by default (can be disabled with MSW_VERBOSE=false)
       MSW_VERBOSE: process.env.MSW_VERBOSE ?? 'true',
     },
+    // Live tests talk to real services; they run only through `pnpm test:live`.
+    exclude: ['**/node_modules/**', '**/dist/**', 'tests/live/**'],
     globalSetup: ['./tests/global-setup.ts'],
     setupFiles: ['./tests/setup.ts'],
     coverage: {

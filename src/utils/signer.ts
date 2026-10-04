@@ -26,13 +26,6 @@ export function createSigner(sigType: SignerType, deployKey: string) {
       }
     }
 
-    case 'kyve': {
-      return {
-        signer: new EthereumSigner(deployKey),
-        token: 'kyve' as const,
-      }
-    }
-
     case 'solana': {
       return {
         signer: new HexSolanaSigner(deployKey),
@@ -42,7 +35,7 @@ export function createSigner(sigType: SignerType, deployKey: string) {
 
     default: {
       throw new Error(
-        `Invalid sig-type provided: ${sigType}. Allowed values are 'arweave', 'ethereum', 'polygon', 'kyve', or 'solana'.`,
+        `Invalid sig-type provided: ${sigType}. Allowed values are 'arweave', 'ethereum', 'polygon', or 'solana'.`,
       )
     }
   }

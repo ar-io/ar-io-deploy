@@ -15,12 +15,36 @@ type ClusterProgramIds = Partial<
 export type SolanaCluster = 'devnet' | 'mainnet'
 
 /**
- * Normalize a Solana private key provided as a string. We accept a base58
- * encoded 64-byte secret key (the format wallets like Phantom export), which is
- * exactly what arbundles' HexSolanaSigner expects, so we just trim it.
+ * Normalize a Solana private key provided as a string: a base58-encoded
+ * 64-byte secret key (what wallets like Phantom export, and what arbundles'
+ * HexSolanaSigner expects), or the JSON byte array of a `solana-keygen`
+ * id.json pasted in whole, as secrets often are.
+ *
+ * Validated here, where the key is read, so a malformed key stops the deploy
+ * before anything is uploaded rather than after it has been paid for.
+ *
+ * @throws When the input is neither form, or does not hold 64 bytes.
  */
 export function solanaDeployKeyFromString(input: string): string {
-  return input.trim()
+  const trimmed = input.trim()
+  if (trimmed.startsWith('[')) {
+    return solanaDeployKeyFromFile(trimmed)
+  }
+
+  let bytes: Uint8Array
+  try {
+    bytes = bs58.decode(trimmed)
+  } catch {
+    throw new Error('Invalid Solana key: expected a base58 secret key or an id.json byte array')
+  }
+
+  if (bytes.length !== 64) {
+    throw new Error(
+      `Invalid Solana key: expected a 64-byte secret key, got ${bytes.length} bytes (a public address is not a secret key)`,
+    )
+  }
+
+  return trimmed
 }
 
 /**

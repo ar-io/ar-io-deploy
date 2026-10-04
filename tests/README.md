@@ -108,23 +108,11 @@ Tests use [MSW](https://mswjs.io/) to intercept and mock HTTP requests at the ne
 
 The MSW server intercepts requests to:
 
-1. **Turbo Upload Service** (`upload.ardrive.io`)
-   - File and folder uploads
-   - Multi-part uploads
-   - Upload status checks
+1. **Turbo Upload Service** (`upload.ardrive.io`): service info and data item uploads
+2. **Turbo Payment Service** (`payment.ardrive.io`): balances, free-tier status, prices and fund transactions
+3. **GraphQL gateway** (`turbo-gateway.com/graphql`): past uploads for `--incremental`
 
-2. **Turbo Payment Service** (`payment.ardrive.io`)
-   - Balance queries
-   - Price calculations
-   - Payment transactions
-
-3. **AO Services**
-   - Compute Unit (`cu.ardrive.io`) - Message execution and results
-   - Message Unit (`mu.ao-testnet.xyz`) - Data item uploads
-
-4. **Arweave** (`turbo-gateway.com/graphql`)
-   - Contract state queries
-   - Transaction lookups
+Any request no handler answers fails the test, so nothing reaches a live service. See `tests/mocks/README.md`.
 
 ## Writing Tests
 
@@ -139,11 +127,15 @@ it('should deploy with on-demand funding', async () => {
   const result = await runCommand([
     'deploy',
     '--deploy-folder',
-    './test-app',
+    './tests/fixtures/test-app',
+    '--sig-type',
+    'ethereum',
+    '--private-key',
+    TEST_ETH_PRIVATE_KEY,
     '--on-demand',
-    'ario',
+    'base-eth',
     '--max-token-amount',
-    '1.5',
+    '0.5',
   ])
 
   expect(result.error).toBeUndefined()

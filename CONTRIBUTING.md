@@ -94,28 +94,31 @@ fix(uploader): handle empty manifest paths correctly
 docs: update installation instructions
 ```
 
-### Creating a Changeset
+### Releases
 
-Before submitting your PR, create a changeset to describe your changes:
+Releases are cut by semantic-release when a branch merges to `main` (or `alpha` for prereleases). The version comes from the commit messages: `fix:` releases a patch, `feat:` a minor version, and `feat!:` or a `BREAKING CHANGE:` footer a major one. There is nothing to bump or record by hand.
+
+### Live tests
+
+`pnpm test:live` runs the built CLI against Turbo's development sandbox, its gateway and public Solana RPCs, with nothing mocked. The uploads are free (within the sandbox's limit) but real and permanent, so they are opt-in and not part of `pnpm test`. Run them before a release, or when you change anything that talks to Turbo or Solana.
+
+The tests that spend tokens (on-demand top-ups, shared credits, ArNS updates) run only when given a funded **devnet** wallet and a devnet ArNS name that wallet controls:
 
 ```bash
-pnpm changeset
+ARIO_DEPLOY_LIVE_SOLANA_WALLET=./devnet-id.json \
+ARIO_DEPLOY_LIVE_ARNS_NAME=my-devnet-test-name \
+pnpm test:live
 ```
 
-This will:
-
-1. Ask you to select the type of change (patch, minor, major)
-2. Prompt you to describe the change
-3. Create a markdown file in `.changeset/` directory
+The wallet needs some devnet SOL (a run spends a few hundredths). Without these variables those tests are skipped.
 
 ### Pull Request Process
 
 1. Update documentation if needed
 2. Add tests for new features
 3. Ensure all tests pass
-4. Create a changeset (see above)
-5. Push your branch and create a Pull Request
-6. Wait for review and address any feedback
+4. Push your branch and create a Pull Request
+5. Wait for review and address any feedback
 
 ## Code Style
 
