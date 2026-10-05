@@ -136,7 +136,7 @@ The repo ships a composite GitHub Action (`action.yml`) that external projects u
     arns-name: myapp
 ```
 
-Key features: dedupe cache via `actions/cache` (the whole `.ario-deploy/` directory, one entry per run, restored by prefix, so nothing is ever deleted), PR preview mode with auto-generated undernames and PR comments. Preview undernames are not removed on PR close, and every step skips `closed` events. Inputs reach the shell only through `env:` and a quoted argument array, never `${{ }}` pasted into the script, because a branch name is attacker-chosen and the step holds both keys. It installs `@ar.io/deploy@^2`; bump that with the major. The CLI honours `NO_COLOR` (the step sets it) and prints `Tx ID: <id>` before any ArNS update, which is the line the step reads.
+Key features: dedupe cache via `actions/cache` (the whole `.ario-deploy/` directory, one entry per run, restored by prefix, so nothing is ever deleted; when no 2.x entry exists yet, the 1.x `ario-deploy-transaction-cache` entry is restored instead, since a cache only matches its original paths), PR preview mode with auto-generated undernames and PR comments. Preview undernames are not removed on PR close, and every step skips `closed` events. Inputs reach the shell only through `env:` and a quoted argument array, never `${{ }}` pasted into the script, because a branch name is attacker-chosen and the step holds both keys. It installs `@ar.io/deploy@^2`; bump that with the major. The CLI honours `NO_COLOR` (the step sets it) and prints `Tx ID: <id>` before any ArNS update, which is the line the step reads.
 
 ## Key Constraints
 
