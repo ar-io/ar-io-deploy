@@ -27,6 +27,33 @@ describe('createSolanaArnsSigner', () => {
   })
 })
 
+const fixtureBytes = (): number[] => [...bs58.decode(FIXTURE_SECRET_BASE58)]
+
+describe('solanaDeployKeyFromFile', () => {
+  it('accepts an id.json whose last 32 bytes are the public key of the first 32', () => {
+    expect(solanaDeployKeyFromFile(JSON.stringify(fixtureBytes()))).toBe(FIXTURE_SECRET_BASE58)
+  })
+
+  it('refuses an id.json whose public half does not match its seed', () => {
+    const bytes = fixtureBytes()
+    bytes[63] = (bytes[63] + 1) % 256
+    expect(() => solanaDeployKeyFromFile(JSON.stringify(bytes))).toThrow(
+      /last 32 bytes are not the public key/,
+    )
+  })
+
+  it("refuses an id.json holding another wallet's public key", () => {
+    const bytes = [...fixtureBytes().slice(0, 32), ...Array.from({ length: 32 }, (_, i) => i)]
+    expect(() => solanaDeployKeyFromFile(JSON.stringify(bytes))).toThrow(/not the public key/)
+  })
+
+  it('refuses entries that are not bytes', () => {
+    const bytes = fixtureBytes()
+    bytes[0] = 256
+    expect(() => solanaDeployKeyFromFile(JSON.stringify(bytes))).toThrow(/0 to 255/)
+  })
+})
+
 describe('clusterProgramIds', () => {
   it('returns no overrides for mainnet (uses SDK defaults)', () => {
     expect(clusterProgramIds('mainnet')).toEqual({})

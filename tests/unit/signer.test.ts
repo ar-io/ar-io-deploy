@@ -1,6 +1,7 @@
 import bs58 from 'bs58'
 import { describe, expect, it } from 'vitest'
 
+import { generateSolanaWallet } from '../../src/utils/keygen.js'
 import { createSigner } from '../../src/utils/signer.js'
 import { solanaDeployKeyFromFile, solanaDeployKeyFromString } from '../../src/utils/solana.js'
 
@@ -28,7 +29,7 @@ describe('createSigner', () => {
 
 describe('solana deploy key parsing', () => {
   it('converts an id.json byte array to a base58 secret key', () => {
-    const bytes = Array.from({ length: 64 }, (_, i) => i)
+    const bytes = generateSolanaWallet().idJson
     const key = solanaDeployKeyFromFile(JSON.stringify(bytes))
 
     expect(key).toBe(bs58.encode(Uint8Array.from(bytes)))
@@ -46,8 +47,9 @@ describe('solana deploy key parsing', () => {
   })
 
   it('accepts an id.json byte array pasted as a string', () => {
-    expect(solanaDeployKeyFromString(JSON.stringify(Array.from({ length: 64 }, () => 7)))).toBe(
-      secretKey,
+    const bytes = generateSolanaWallet().idJson
+    expect(solanaDeployKeyFromString(JSON.stringify(bytes))).toBe(
+      bs58.encode(Uint8Array.from(bytes)),
     )
   })
 

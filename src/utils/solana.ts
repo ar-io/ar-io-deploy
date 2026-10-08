@@ -1,3 +1,5 @@
+import { createPrivateKey, createPublicKey } from 'node:crypto'
+
 import { DEVNET_PROGRAM_IDS, DEVNET_RPC_URL, MAINNET_RPC_URL } from '@ar.io/sdk'
 import {
   type Address,
@@ -47,10 +49,26 @@ export function solanaDeployKeyFromString(input: string): string {
   return trimmed
 }
 
+/** PKCS#8 DER header for an ed25519 private key; the 32-byte seed follows it. */
+const ED25519_PKCS8_PREFIX = Buffer.from('302e020100300506032b657004220420', 'hex')
+
+/** The ed25519 public key for a 32-byte seed. */
+export function ed25519PublicKeyFromSeed(seed: Uint8Array): Buffer {
+  const privateKey = createPrivateKey({
+    format: 'der',
+    key: Buffer.concat([ED25519_PKCS8_PREFIX, seed]),
+    type: 'pkcs8',
+  })
+  return Buffer.from(createPublicKey(privateKey).export({ format: 'jwk' }).x as string, 'base64url')
+}
+
 /**
  * Convert a `solana-keygen` JSON wallet (a JSON array of 64 bytes, e.g.
  * ~/.config/solana/id.json) into the base58 secret-key string used as the
  * deploy key throughout the CLI.
+ *
+ * The last 32 bytes must be the public key of the first 32. A file where they
+ * differ signs as one address while claiming another, so it is refused.
  */
 export function solanaDeployKeyFromFile(content: string): string {
   let bytes: number[]
@@ -66,7 +84,18 @@ export function solanaDeployKeyFromFile(content: string): string {
     )
   }
 
-  return bs58.encode(Uint8Array.from(bytes))
+  if (!bytes.every((byte) => Number.isInteger(byte) && byte >= 0 && byte <= 255)) {
+    throw new Error('Invalid Solana wallet file: every entry must be a whole number from 0 to 255')
+  }
+
+  const secret = Uint8Array.from(bytes)
+  if (!ed25519PublicKeyFromSeed(secret.subarray(0, 32)).equals(secret.subarray(32))) {
+    throw new Error(
+      'Invalid Solana wallet file: the last 32 bytes are not the public key of the first 32. The file is damaged or was not made by solana-keygen.',
+    )
+  }
+
+  return bs58.encode(secret)
 }
 
 /**
