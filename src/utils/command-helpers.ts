@@ -128,21 +128,27 @@ export function uploadWorkflowConfig(
   }
 }
 
+export const SANDBOX_WARNING =
+  'This upload went to the Turbo sandbox for testing. It is not permanent and production gateways do not serve it.'
+
 /**
  * The success table's upload rows. `Tx ID: <id>` is the first line, and is the
  * line the GitHub Action reads its `tx-id` output from.
  */
 export function uploadResultRows(
   result: UploadWorkflowResult,
-  config: Pick<UploadWorkflowConfig, 'dev' | 'uploader'>,
+  config: Pick<UploadWorkflowConfig, 'uploader'>,
 ): DisplayRow[] {
   const rows: DisplayRow[] = [['Tx ID', chalk.green(result.transactionId)]]
   if (config.uploader) {
     rows.push(['Bundler service', chalk.cyan(config.uploader)])
   }
 
-  if (config.dev) {
-    rows.push(['Turbo', chalk.yellow('development sandbox')])
+  if (result.development) {
+    rows.push(
+      ['Turbo', chalk.yellow('development sandbox')],
+      ['Warning', chalk.yellow(SANDBOX_WARNING)],
+    )
   }
 
   if (result.gatewayUrl) {

@@ -14,6 +14,7 @@ import type { SignerType } from '../types/index.js'
 import { cleanupCache, loadCache, saveCache, type TransactionCache } from '../utils/cache.js'
 import { chalk } from '../utils/chalk.js'
 import { parseCompressionConfig } from '../utils/compression.js'
+import { explainPaymentRequired, formatBytes } from '../utils/display.js'
 import {
   type ChainIndex,
   createChainIndex,
@@ -80,12 +81,6 @@ export interface UploadWorkflowConfig {
   uploader?: string
   /** Spend the upload key's balance before shared credits. */
   'use-signer-balance-first'?: boolean
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`
-  return `${(bytes / 1024 / 1024).toFixed(1)} MiB`
 }
 
 export interface UploadWorkflowIo {
@@ -297,6 +292,8 @@ export function createCacheWriter(
 }
 
 export interface UploadWorkflowResult {
+  /** True when the upload went to Turbo's development sandbox. */
+  development: boolean
   /** Gateway to view the upload on, when the network's is known. */
   gatewayUrl?: string
   transactionId: string
@@ -541,6 +538,12 @@ export async function runUploadWorkflow(
 
   const serviceInfo = await fetchUploadServiceInfo(services.uploadUrl)
 
+  const describeUploadError = (error: unknown): string =>
+    explainPaymentRequired(errorMessage(error), {
+      freeLimitBytes: serviceInfo.freeUploadLimitBytes ?? FALLBACK_FREE_ITEM_BYTES,
+      uploadUrl: services.uploadUrl,
+    }) ?? errorMessage(error)
+
   const ensureCredits = async (): Promise<string | undefined> => {
     /*
      * A top-up an earlier run sent but never saw credited. Buying again before
@@ -635,7 +638,9 @@ export async function runUploadWorkflow(
 
     const payerNote = paidBy ? ` (shared credits from ${paidBy.join(', ')})` : ''
     if (requiredWinc === 0n) {
-      spinner.succeed(`Turbo credits check passed (within the free tier)${payerNote}`)
+      spinner.succeed(
+        `Turbo credits check passed (within this wallet's free tier; Turbo also meters free uploads per IP range, checked at upload time)${payerNote}`,
+      )
       return undefined
     }
 
@@ -710,7 +715,7 @@ export async function runUploadWorkflow(
       )
     } catch (error) {
       spinner.fail('Upload failed')
-      uploadError = `Upload failed: ${errorMessage(error)}`
+      uploadError = `Upload failed: ${describeUploadError(error)}`
     }
   } else if (folderPlan) {
     startPhase(`Uploading folder ${chalk.yellow(config['deploy-folder'])}`)
@@ -742,7 +747,7 @@ export async function runUploadWorkflow(
     } catch (error) {
       spinner.fail('Upload failed')
       uploadError =
-        `Upload failed: ${errorMessage(error)}` +
+        `Upload failed: ${describeUploadError(error)}` +
         (useCache
           ? '. Files that did upload are cached, so a re-run does not pay for them again.'
           : '')
@@ -759,6 +764,7 @@ export async function runUploadWorkflow(
   }
 
   return {
+    development: services.development,
     gatewayUrl:
       serviceInfo.gateway ?? (services.development ? undefined : 'https://turbo-gateway.com'),
     transactionId,
