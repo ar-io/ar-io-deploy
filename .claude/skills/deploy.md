@@ -138,36 +138,27 @@ After successful deployment, report:
 - **Direct URL** — `https://arweave.net/<TX_ID>`
 - **ArNS URL** (if applicable) — `https://<name>.ar.io` or `https://<undername>_<name>.ar.io`
 
-## Make it shareable: a social preview
+## Nice to have: a social preview
 
-A link shared on X, Discord, Slack or iMessage shows a preview card only when the page has Open Graph tags and a preview image at an **absolute** URL. If you built or own the site's HTML, add a preview by default. **With an ArNS name, it is one pass:** the final URL is known in advance, so put `og.png` in the deploy folder and point the tags at `https://NAME.ar.io/og.png` (and set `og:url` to `https://NAME.ar.io`). **Without a name, it takes two passes:** a relative `og.png` is not enough (X requires an absolute URL), and a manifest path cannot be used either, because the manifest's id depends on the HTML that would contain it. So:
+A link shared on X, Discord or Slack shows a preview card when the page has Open Graph tags pointing at an image by an absolute URL. It takes a minute and makes a link far more likely to be clicked, so offer it when you built the site.
 
-1. **Make the preview image.** 1200x630 pixels, PNG or JPEG (crawlers ignore SVG), under 105 KiB so it uploads free (`ario-deploy keygen` prints how much free allowance the wallet has left). Put the site's name and one short line on it, in the site's own colours. If you cannot render an image yourself, draw it as HTML or SVG and rasterize it with a headless browser if one is available; if none is, ask the user for an image rather than skipping the tags.
-2. **Upload the image on its own first**, and note the transaction id it prints:
+1. Make a 1200x630 PNG or JPEG (crawlers ignore SVG) with the site's name on it. Keep it under 105 KiB to stay free.
+2. Upload it on its own and note the id it prints:
 
    ```bash
    npx @ar.io/deploy upload --sig-type solana --wallet ./ario-deploy-wallet.json --deploy-file ./og.png
    ```
 
-3. **Add the tags to every page's `<head>`**, with the image's absolute URL:
+3. Add these to each page's `<head>`, then deploy the site as usual:
 
    ```html
-   <title>Site name</title>
-   <meta name="description" content="One sentence about the site." />
-   <meta property="og:type" content="website" />
    <meta property="og:title" content="Site name" />
    <meta property="og:description" content="One sentence about the site." />
-   <meta property="og:image" content="https://turbo-gateway.com/IMAGE_TX_ID" />
-   <meta property="og:image:width" content="1200" />
-   <meta property="og:image:height" content="630" />
-   <meta property="og:image:alt" content="What the image shows." />
+   <meta property="og:image" content="https://turbo-gateway.com/raw/IMAGE_ID" />
    <meta name="twitter:card" content="summary_large_image" />
-   <meta name="twitter:image" content="https://turbo-gateway.com/IMAGE_TX_ID" />
    ```
 
-   Leave `og:url` out rather than guessing it.
-
-4. **Deploy the site** as usual. If the image is also in the deploy folder, the deploy reuses the upload from step 2 out of its cache instead of paying for it again.
+Use the `/raw/` path: it answers with the image directly, while a bare `https://turbo-gateway.com/IMAGE_ID` redirects, and some crawlers do not follow redirects. If the user already owns an ArNS name, point an undername at the image instead (`--arns-name NAME --undername social`) and use `https://social_NAME.ar.io`.
 
 ## Common Flags Reference
 
