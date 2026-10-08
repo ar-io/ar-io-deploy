@@ -129,7 +129,7 @@ npx @ar.io/deploy deploy
 ## Deployment Steps
 
 1. **Build the project** — run the project's build command (e.g., `npm run build`, `pnpm build`)
-2. **Check for keys** — look for `DEPLOY_KEY` (and `ARNS_KEY` if ArNS) or wallet files. If there are none, run `npx @ar.io/deploy keygen`
+2. **Check for keys:** look for `DEPLOY_KEY` (and `ARNS_KEY` if ArNS) or wallet files. If there are none, run `npx @ar.io/deploy keygen`
 3. **Detect build folder** — check for `./dist`, `./build`, `./out`, or ask the user
 4. **Run deploy** — execute the appropriate `ario-deploy` command
 5. **Report results** — show the transaction ID and URLs

@@ -47,7 +47,7 @@ export default class Keygen extends Command {
       this.log(await this.freeAllowanceLine(wallet.address, flags.dev))
       this.log('\nNext, deploy a folder with:')
       this.log(
-        `  ario-deploy deploy --sig-type solana --wallet ${flags.out} --deploy-folder ./dist${flags.dev ? ' --dev' : ''}`,
+        `  ario-deploy deploy --sig-type solana --wallet ${/\s/.test(flags.out) ? `"${flags.out}"` : flags.out} --deploy-folder ./dist${flags.dev ? ' --dev' : ''}`,
       )
     } catch (error) {
       reportFailure(this, error, 'Key generation failed')
