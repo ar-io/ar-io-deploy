@@ -31,7 +31,7 @@ Run a single test file: `pnpm vitest run path/to/file.test.ts`
 ### CLI Framework (oclif)
 
 - **Entry points**: `bin/run.js` (production, uses `dist/`), `bin/dev.js` (development, uses tsx)
-- **Commands**: `src/commands/deploy.ts` (upload + optional ArNS update), `src/commands/upload.ts` (upload only)
+- **Commands**: `src/commands/deploy.ts` (upload + optional ArNS update), `src/commands/upload.ts` (upload only), `src/commands/keygen.ts` (creates a Solana `id.json` wallet; logic in `src/utils/keygen.ts`)
 - **No interactive command**: each command decides whether to prompt via `canPrompt()` (stdin and stdout are TTYs, `CI` unset). Without a terminal, `deploy` falls back to upload-only when no ArNS name is given, and a missing key is an error, never a prompt.
 - **Shared command code**: `src/utils/command-helpers.ts` holds what both commands need: key resolution (`resolveKey`, which validates a Solana key as it reads it), `uploadWorkflowConfig`, the result rows, and `reportFailure`. Keep it there; the two hand-maintained copies it replaced had drifted into bugs. Commands are files in `src/commands/`, and oclif loads every file under `dist/commands`, so helpers must not live there.
 - **Vite entries**: `vite.config.ts` builds `index` and one entry per command; everything else is bundled into chunks. A new command needs its own entry.

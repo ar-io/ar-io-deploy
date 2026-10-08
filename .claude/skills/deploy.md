@@ -19,22 +19,18 @@ A deployment uses up to **two keys**:
 
 They can be the same Solana wallet or two different wallets.
 
-**Create a Solana wallet** (works for both upload and ArNS):
+**Create a Solana wallet** (works for both upload and ArNS) with `ario-deploy keygen`:
 
 ```bash
-# Install Solana CLI if needed
-sh -c "$(curl -sSfL https://release.anza.xyz/stable/install)"
-
-# Generate a new keypair (saves to ~/.config/solana/id.json)
-solana-keygen new
-
-# Export the base58 private key
-solana-keygen export-private-key
+ario-deploy keygen
 ```
 
-**For upload-only (no ArNS)** — an Arweave wallet also works:
+It writes `./ario-deploy-wallet.json` (a `solana-keygen` `id.json`, readable by the user only, never overwritten, added to `.gitignore` inside a git repository) and prints the file path, the public address, the free upload allowance and the exact `deploy` command to run next. It never prints the secret key. Use `--out <path>` to choose another file. Do not read the wallet file or print its contents.
 
-- Generate at https://arweave.app or via `arweave-js`
+Tell the user to back up the wallet file: anyone who has it controls the wallet, and it cannot be recovered.
+
+**For upload-only (no ArNS):** an Arweave wallet also works, if the user already has one:
+
 - Base64-encode the JWK: `base64 -i wallet.json`
 
 ### 2. Get an ArNS Name (for human-readable URLs)
@@ -48,7 +44,13 @@ ArNS names give you a permanent URL like `https://myapp.ar.io`.
 
 ### 3. Fund Uploads
 
-Uploads to Arweave cost Turbo credits. Two options:
+**Free tier facts** (tell the user before the first deploy):
+
+- Turbo uploads are free up to **105 KiB per file**, and up to **10 MiB over the lifetime of a wallet and 10 MiB over the lifetime of an IP range**. Both are metered.
+- The pre-upload check only knows the wallet. It can say "within this wallet's free tier" and the upload can still fail with HTTP 402 because the IP range's allowance is used up.
+- On a 402, **stop and report it**. Never fall back to `--dev` to get past it: `--dev` uploads to the Turbo sandbox, which is not permanent and is not served by production gateways, so the URL it prints is not a real deployment. Offer these instead: add Turbo credits, `--on-demand` with `--max-token-amount`, or credits shared to the wallet.
+
+Beyond the free tier, uploads cost Turbo credits. Options:
 
 - **Pre-fund**: Buy Turbo credits at https://turbo.ardrive.io with crypto or credit card
 - **On-demand**: `--on-demand <token> --max-token-amount <n>` tops up once during deploy if credits run short. The token must match the upload key: `ario`, `solana`, `solana-usdc` with `--sig-type solana`; `base-eth`, `base-usdc` with an Ethereum/Polygon key. Arweave keys cannot top up on demand.
@@ -78,7 +80,7 @@ Before deploying, verify:
 3. **Wallet/key is available** — Check for:
    - `DEPLOY_KEY` environment variable (and `ARNS_KEY` if updating ArNS)
    - Wallet files (e.g., `wallet.json`, `id.json`, `~/.config/solana/id.json`)
-   - Ask the user if neither is found
+   - If neither is found, run `ario-deploy keygen` to create a wallet; do not ask the user to generate one elsewhere
 4. **ArNS name exists** (if deploying with ArNS) — The user must have already purchased a name at https://arns.ar.io
 
 ## Deployment Flow
@@ -155,7 +157,7 @@ After successful deployment, report:
 | `--on-demand`           | Top-up token (must match the upload key)                     | —                           |
 | `--max-token-amount`    | Max spend for the whole deploy (required with on-demand)     | —                           |
 | `--paid-by`             | Wallets whose shared credits pay                             | all that shared             |
-| `--dev`                 | Turbo development sandbox (upload + payment)                 | `false`                     |
+| `--dev`                 | Turbo sandbox, testing only, not permanent                   | `false`                     |
 | `--no-dedupe`           | Skip deduplication cache                                     | `false`                     |
 | `--compress`            | Compress uploads: `gzip`, `br` or `none`                     | `none`                      |
 | `--compress-exclude`    | Globs to upload uncompressed                                 | —                           |
@@ -225,17 +227,19 @@ For PR previews:
 
 ## Troubleshooting
 
-| Error                                          | Solution                                                                                                                                                   |
-| ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| "DEPLOY_KEY not set"                           | Set `DEPLOY_KEY` env var or use `--wallet`/`--private-key`                                                                                                 |
-| "deploy-folder does not exist"                 | Build first (`npm run build`) or specify correct path                                                                                                      |
-| "ArNS name does not exist"                     | Verify the name exists at https://arns.ar.io                                                                                                               |
-| "Insufficient Turbo Credits"                   | Fund the upload wallet at https://turbo.ardrive.io, or use `--on-demand` with a token the key can pay in. On the sandbox, pass `--dev`                     |
-| Pages show garbage after a `--compress` deploy | The gateway served an unindexed item without `Content-Encoding` (needs ar-io-node #964/#966). Use a gateway with the fix, or redeploy without `--compress` |
-| ArNS update fails                              | Ensure `ARNS_KEY` or `--arns-wallet` is set with a Solana key that controls the ArNS name                                                                  |
+| Error                                           | Solution                                                                                                                                                                                                                                 |
+| ----------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| "DEPLOY_KEY not set"                            | Set `DEPLOY_KEY` env var or use `--wallet`/`--private-key`                                                                                                                                                                               |
+| "deploy-folder does not exist"                  | Build first (`npm run build`) or specify correct path                                                                                                                                                                                    |
+| "ArNS name does not exist"                      | Verify the name exists at https://arns.ar.io                                                                                                                                                                                             |
+| HTTP 402 / "Turbo refused the upload as unpaid" | The free tier is used up (per wallet or per IP range), or a file is over 105 KiB. Add Turbo credits at https://turbo.ardrive.io, use `--on-demand`, or have credits shared to the wallet. Report it to the user; never switch to `--dev` |
+| "Insufficient Turbo Credits"                    | Fund the upload wallet at https://turbo.ardrive.io, or use `--on-demand` with a token the key can pay in. On the sandbox, pass `--dev`                                                                                                   |
+| Pages show garbage after a `--compress` deploy  | The gateway served an unindexed item without `Content-Encoding` (needs ar-io-node #964/#966). Use a gateway with the fix, or redeploy without `--compress`                                                                               |
+| ArNS update fails                               | Ensure `ARNS_KEY` or `--arns-wallet` is set with a Solana key that controls the ArNS name                                                                                                                                                |
 
 ## Important Notes
 
+- **`--dev` is not permanent.** It is the Turbo sandbox, for testing the tool only. A sandbox upload is not served by production gateways. Never use it to get past a 402, and if it was used, say so plainly in the report
 - **Arweave uploads are permanent** — verify your build has no secrets before deploying
 - **Deduplication is on by default** — unchanged files are not re-uploaded, and identical files within one deploy are uploaded once (saves cost). The credit check prices only what will actually be uploaded
 - **Compression (`--compress gzip`) cuts upload cost ~5-8x for HTML/JS/CSS/JSON** — suggest it for static sites, with `--compress-exclude "llms*.txt,*.md"` for files plain HTTP clients fetch. Recommend deploying to a test undername first: gateways must send `Content-Encoding` for items they have not indexed yet (ar.io/Turbo gateways do; others need ar-io-node #964/#966)
