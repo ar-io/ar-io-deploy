@@ -25,7 +25,7 @@ They can be the same Solana wallet or two different wallets.
 ario-deploy keygen
 ```
 
-It writes `./ario-deploy-wallet.json` (a `solana-keygen` `id.json`, readable by the user only, never overwritten, added to `.gitignore` inside a git repository) and prints the file path, the public address, the free upload allowance and the exact `deploy` command to run next. It never prints the secret key. Use `--out <path>` to choose another file. Do not read the wallet file or print its contents.
+It writes `~/.ario-deploy/wallets/<address>.json` (a `solana-keygen` `id.json`, never overwritten) and prints the file path, the public address, the free upload allowance and the exact `deploy` command to run next. Use the path it prints. It never prints the secret key. On Linux and macOS only the user's account can read the file; on Windows the same is true unless `keygen` prints a warning that it could not set the permissions. Use `--out <path>` to choose another file, never inside the folder being deployed: `deploy` and `upload` refuse to publish a wallet file or any file that looks like a private key. Do not read the wallet file or print its contents.
 
 Tell the user to back up the wallet file: anyone who has it controls the wallet, and it cannot be recovered.
 
@@ -79,7 +79,7 @@ Before deploying, verify:
    ```
 3. **Wallet/key is available** — Check for:
    - `DEPLOY_KEY` environment variable (and `ARNS_KEY` if updating ArNS)
-   - Wallet files (e.g., `wallet.json`, `id.json`, `~/.config/solana/id.json`)
+   - Wallet files (e.g., `~/.ario-deploy/wallets/*.json`, `~/.config/solana/id.json`), never one inside the folder being deployed
    - If neither is found, run `ario-deploy keygen` to create a wallet; do not ask the user to generate one elsewhere
 4. **ArNS name exists** (if deploying with ArNS) — The user must have already purchased a name at https://arns.ar.io
 
@@ -146,7 +146,7 @@ A link shared on X, Discord or Slack shows a preview card when the page has Open
 2. Upload it on its own and note the id it prints:
 
    ```bash
-   npx @ar.io/deploy upload --sig-type solana --wallet ./ario-deploy-wallet.json --deploy-file ./og.png
+   npx @ar.io/deploy upload --sig-type solana --wallet ~/.ario-deploy/wallets/<address>.json --deploy-file ./og.png
    ```
 
 3. Add these to each page's `<head>`, then deploy the site as usual:
