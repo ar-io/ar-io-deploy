@@ -7,6 +7,7 @@ import {
   canPrompt,
   isPromptCancel,
   MISSING_UPLOAD_KEY,
+  refuseWalletInUpload,
   reportFailure,
   resolveKey,
   uploadResultRows,
@@ -66,6 +67,8 @@ export default class Upload extends Command {
       if (typeof config === 'string') {
         this.error(config)
       }
+
+      refuseWalletInUpload(config, [key.wallet])
 
       const deployKey = resolveKey({
         envVar: 'DEPLOY_KEY',

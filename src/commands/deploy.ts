@@ -10,6 +10,7 @@ import {
   canPrompt,
   isPromptCancel,
   MISSING_UPLOAD_KEY,
+  refuseWalletInUpload,
   reportFailure,
   resolveKey,
   uploadResultRows,
@@ -159,6 +160,9 @@ export default class Deploy extends Command {
       if (interactive) {
         this.log('')
       }
+
+      // A wallet is never published, whatever else the flags say.
+      refuseWalletInUpload(config, [uploadKey.wallet, arnsKey.wallet])
 
       // Every key is read and validated before anything is paid for.
       const deployKey = resolveKey({

@@ -508,6 +508,9 @@ export async function runUploadWorkflow(
           `${compression ? ` after ${compression.encoding}` : ''}), ${cacheHits} cached${recoveredMsg}, ` +
           `${duplicates} duplicates`,
       )
+      if (folderPlan.skipped.length > 0) {
+        spinner.info(`Not uploaded: ${folderPlan.skipped.join(', ')} (git repository data)`)
+      }
     }
   } catch (error) {
     spinner.fail('Failed to plan upload')

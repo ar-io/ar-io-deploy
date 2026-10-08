@@ -28,6 +28,7 @@ import {
   incrementalCacheKey,
   isArweaveId,
 } from './incremental.js'
+import { assertNotPrivateKey } from './key-safety.js'
 import type { UploadClient } from './upload-types.js'
 
 /**
@@ -217,6 +218,8 @@ export async function planFileUpload(
   filePath: string,
   options?: { cache?: TransactionCache; compression?: CompressionConfig },
 ): Promise<FileUploadPlan> {
+  assertNotPrivateKey(filePath, filePath)
+
   const contentType = mime.lookup(filePath) || 'application/octet-stream'
   const encoding =
     options?.compression && shouldCompress(path.basename(filePath), options.compression)
@@ -359,6 +362,8 @@ export interface FolderUploadPlan {
   manifestBytes: number
   /** Of `cacheHits`, how many the chain index recovered. */
   recovered: number
+  /** Folders left out of the upload (`.git`), relative to the deploy folder. */
+  skipped: string[]
   /**
    * Total bytes that uploading this plan will send, excluding the manifest.
    * This is what the credit check prices, so a redeploy of two changed chunks
@@ -398,8 +403,14 @@ export async function planFolderUpload(
   // Incremental mode always keeps a cache: it is where recovered ids go.
   const useCache = options?.cache !== undefined || incremental !== undefined
 
-  const relativePaths = getAllFiles(folderPath)
+  const skipped: string[] = []
+  const relativePaths = getAllFiles(folderPath, folderPath, skipped)
   assertUploadableFolder(relativePaths, options?.fallbackFile)
+
+  // Before anything is hashed, looked up or sent: a key is never published.
+  for (const relativePath of relativePaths) {
+    assertNotPrivateKey(path.join(folderPath, relativePath), relativePath)
+  }
 
   /*
    * Hash every file when a cache is in play. In incremental mode the hash is
@@ -520,6 +531,7 @@ export async function planFolderUpload(
     files,
     manifestBytes: estimateManifestBytes(relativePaths),
     recovered,
+    skipped,
     uploadBytes: toUpload.reduce((sum, file) => sum + file.uploadBytes, 0),
   }
 }

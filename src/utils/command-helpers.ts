@@ -12,6 +12,7 @@ import type { UploadWorkflowConfig, UploadWorkflowResult } from '../workflows/up
 import { chalk } from './chalk.js'
 import { deployKeyFromPrivateKey, deployKeyFromWalletFile } from './deploy-key.js'
 import { type DisplayRow, formatUploadError } from './display.js'
+import { keyFileInUpload } from './key-safety.js'
 import { expandPath } from './path.js'
 import { validateIncrementalDedupe } from './validators.js'
 
@@ -78,6 +79,29 @@ export function resolveKey(key: {
   }
 
   throw new Error(key.missing)
+}
+
+/**
+ * Refuse an upload that would publish a wallet file the command was given:
+ * one inside the deploy folder, or the `--deploy-file` itself. Runs before
+ * any key is read or any request is made.
+ *
+ * @throws A `WorkflowError` naming the wallet.
+ */
+export function refuseWalletInUpload(
+  config: Pick<UploadWorkflowConfig, 'deploy-file' | 'deploy-folder'>,
+  walletPaths: Array<string | undefined>,
+): void {
+  const problem = keyFileInUpload(
+    {
+      deployFile: config['deploy-file'] && expandPath(config['deploy-file']),
+      deployFolder: expandPath(config['deploy-folder']),
+    },
+    walletPaths.map((walletPath) => walletPath && expandPath(walletPath)),
+  )
+  if (problem) {
+    throw new WorkflowError(problem)
+  }
 }
 
 export const MISSING_UPLOAD_KEY =
