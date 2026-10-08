@@ -19,7 +19,6 @@ import {
   type TokenType,
   type TurboBalanceResponse,
   type TurboCryptoFundResponse,
-  TurboFactory,
   type TurboInfoResponse,
   type TurboSubmitFundTxResponse,
   type TurboWincForTokenResponse,
@@ -414,19 +413,46 @@ export async function quoteUploadWinc(
 
 /**
  * The wallet's remaining free-upload allowance in bytes, or null when the
- * wallet is unlimited. Reads the payment service by address, so no key is
- * needed.
+ * payment service says the wallet is unlimited. Reads the payment service by
+ * address, so no key is needed.
  *
- * @throws When the payment service cannot be reached.
+ * Only an explicit `"bytesRemaining": null` in a 200 answer means unlimited.
+ * Turbo SDK's `getFreeStatus` also turns a 404 into null, which would report
+ * an unknown wallet as unlimited, so the endpoint is read directly here.
+ *
+ * @throws When the allowance is unknown: the service cannot be reached,
+ *   answers anything but 200, or answers without a usable figure.
  */
 export async function fetchFreeBytesRemaining(
   paymentUrl: string,
   address: string,
-  token: TokenType,
 ): Promise<bigint | null> {
-  const client = TurboFactory.unauthenticated({ paymentServiceConfig: { url: paymentUrl }, token })
-  const { bytesRemaining } = await client.getFreeStatus(address)
-  return bytesRemaining === null ? null : BigInt(bytesRemaining)
+  const url = `${paymentUrl.replace(/\/+$/, '')}/v1/account/free?address=${encodeURIComponent(address)}`
+  const response = await fetch(url, { signal: AbortSignal.timeout(10_000) })
+  if (response.status !== 200) {
+    throw new Error(`the payment service answered ${response.status}`)
+  }
+
+  let body: null | { bytesRemaining?: unknown }
+  try {
+    body = (await response.json()) as null | { bytesRemaining?: unknown }
+  } catch {
+    throw new Error('the payment service did not answer with JSON')
+  }
+
+  const remaining = body?.bytesRemaining
+  if (remaining === null) {
+    return null
+  }
+
+  if (
+    (typeof remaining === 'number' && Number.isSafeInteger(remaining) && remaining >= 0) ||
+    (typeof remaining === 'string' && /^\d+$/.test(remaining))
+  ) {
+    return BigInt(remaining)
+  }
+
+  throw new Error('the payment service did not report a figure')
 }
 
 type FundStatus = TurboSubmitFundTxResponse['status']
