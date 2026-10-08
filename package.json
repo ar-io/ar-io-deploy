@@ -33,6 +33,9 @@
     "commands": "./dist/commands",
     "topicSeparator": " ",
     "topics": {
+      "keygen": {
+        "description": "Create a Solana wallet file"
+      },
       "deploy": {
         "description": "Deploy to the permaweb"
       },

@@ -12,7 +12,13 @@ Deploy your app to Arweave in under a minute:
 # Install
 npm install -g @ar.io/deploy
 
-# Deploy (interactive — prompts for everything)
+# Create a Solana wallet file (prints its address and the next command)
+ario-deploy keygen
+
+# Deploy a folder with that wallet; the first files are free (see Free tier)
+ario-deploy deploy --sig-type solana --wallet ./ario-deploy-wallet.json --deploy-folder ./dist
+
+# Or deploy interactively (prompts for everything)
 ario-deploy deploy
 
 # Or one-liner with a Solana wallet + ArNS name
@@ -31,6 +37,7 @@ Your app is now permanently live at `https://myapp.ar.io`.
 - [Installation](#installation)
 - [Prerequisites](#prerequisites)
 - [Commands](#commands)
+- [Free tier](#free-tier)
 - [On-Demand Payment](#on-demand-payment)
 - [Shared credits](#shared-credits)
 - [Bundler service](#bundler-service)
@@ -108,7 +115,18 @@ They can be the same Solana wallet or two different wallets — provide each exp
    ```
 
 2. **Ethereum/Polygon signers:** Use your raw private key (no encoding needed) as `DEPLOY_KEY`.
-3. **Solana signer:** Use a base58-encoded secret key as `DEPLOY_KEY`, or a `solana-keygen` `id.json` byte-array wallet file via `--wallet`.
+3. **Solana signer:** Use a base58-encoded secret key as `DEPLOY_KEY`, or a `solana-keygen` `id.json` byte-array wallet file via `--wallet`. To make a new one, run `ario-deploy keygen`.
+
+#### Create a wallet with `keygen`
+
+```bash
+ario-deploy keygen                      # writes ./ario-deploy-wallet.json
+ario-deploy keygen --out ./my-wallet.json
+```
+
+`keygen` writes a new Solana key in `solana-keygen` `id.json` format, readable by you only. It refuses to overwrite an existing file, and when the file is inside a git repository it adds the file to the repository's `.gitignore`. It prints the file path, the public address, the wallet's free upload allowance and the exact `deploy` command to run next. It never prints the secret key. Add `--dev` to look up the allowance on the Turbo sandbox.
+
+Back up the wallet file. Anyone who has it controls the wallet, and nobody can recover it for you.
 
 ### ArNS authority key (`ARNS_KEY`)
 
@@ -259,6 +277,19 @@ Upload using a Solana wallet (base58 private key):
 ario-deploy deploy --sig-type solana --private-key "<base58-secret-key>"
 ```
 
+## Free tier
+
+Turbo uploads small files for free. The limits are:
+
+- **105 KiB per file** (per data item). A larger file is billed.
+- **10 MiB over the lifetime of a wallet**, and **10 MiB over the lifetime of an IP range**. Turbo meters both, and an upload is free only while both have allowance left.
+
+`ario-deploy` can check the wallet's allowance before it uploads. It cannot check the IP range, so a deploy can pass the credit check ("within this wallet's free tier") and still be refused at upload time with HTTP 402 when other people on the same network have used the range's allowance. See [402 Payment Required](#troubleshooting).
+
+To go past the free tier, add [Turbo credits](https://turbo.ardrive.io), use [`--on-demand`](#on-demand-payment), or have credits [shared](#shared-credits) to your wallet.
+
+The sandbox (`--dev`) has its own, larger limit and is for testing only: see [Bundler service](#bundler-service).
+
 ## On-Demand Payment
 
 With `--on-demand`, a deploy whose credits cannot cover the upload buys what it is short, once, before the first file uploads. `--max-token-amount` is required and caps that purchase for the whole deploy.
@@ -313,6 +344,8 @@ ario-deploy upload --wallet ./wallet.json --deploy-folder ./dist --dev
 ```
 
 The free upload limit is read from the upload service, so it follows the network: 105 KiB per item in production, 5 MiB in the sandbox.
+
+**A `--dev` upload is not permanent.** It goes to the Turbo sandbox for testing, production gateways do not serve it, and the result output says so. Never switch to `--dev` to get past an error on production: the URL it prints does not work as a permanent site.
 
 ## Command Options
 
@@ -810,7 +843,7 @@ pnpm format
 ```
 ar-io-deploy/
 ├── src/
-│   ├── commands/        # oclif commands: deploy, upload
+│   ├── commands/        # oclif commands: deploy, upload, keygen
 │   ├── constants/       # flag definitions (single source of truth), cache constants
 │   ├── prompts/         # interactive prompts
 │   ├── utils/           # uploader, Turbo payments, cache, incremental index, signers
@@ -839,6 +872,7 @@ ar-io-deploy/
 - **Error: "deploy-file does not exist":** Check that your build file exists and the path is correct
 - **Error: "ArNS name does not exist":** Verify the ArNS name is correct and exists in the specified network
 - **Upload timeouts:** Files have a timeout for upload. Large files may fail and require optimization
+- **"402 Payment Required" (or "Turbo refused the upload as unpaid"):** The upload service will not take the files for free and no credits cover them. Free uploads are up to 105 KiB per file and 10 MiB over the lifetime of a wallet and of an IP range, so a wallet with allowance left can still be refused when its IP range has used up its own. Add Turbo credits at https://turbo.ardrive.io, re-run with `--on-demand` and `--max-token-amount`, or have credits shared to the wallet. Do not use `--dev` to get around it: a sandbox upload is not permanent. Files that uploaded before the failure are cached, so a re-run does not pay for them again
 - **Insufficient Turbo Credits:** Use `--on-demand` with `--max-token-amount` to automatically fund uploads when balance is low
 - **On-demand payment fails:** Ensure the upload wallet holds the token, and that the token matches the key: `ario`, `solana` or `solana-usdc` with `--sig-type solana`; `base-eth` or `base-usdc` with an Ethereum or Polygon key
 - **"Insufficient Turbo credits" on the sandbox with valid sandbox credits:** Use `--dev`, or pass `--payment-url https://payment.services.ar-io.dev` with a custom `--uploader`, so the balance is read from the sandbox
