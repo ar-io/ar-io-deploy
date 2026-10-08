@@ -19,6 +19,7 @@ import {
   type TokenType,
   type TurboBalanceResponse,
   type TurboCryptoFundResponse,
+  TurboFactory,
   type TurboInfoResponse,
   type TurboSubmitFundTxResponse,
   type TurboWincForTokenResponse,
@@ -409,6 +410,23 @@ export async function quoteUploadWinc(
   }
 
   return paid.reduce((sum, bytes) => sum + (prices.get(bytes) ?? 0n), 0n)
+}
+
+/**
+ * The wallet's remaining free-upload allowance in bytes, or null when the
+ * wallet is unlimited. Reads the payment service by address, so no key is
+ * needed.
+ *
+ * @throws When the payment service cannot be reached.
+ */
+export async function fetchFreeBytesRemaining(
+  paymentUrl: string,
+  address: string,
+  token: TokenType,
+): Promise<bigint | null> {
+  const client = TurboFactory.unauthenticated({ paymentServiceConfig: { url: paymentUrl }, token })
+  const { bytesRemaining } = await client.getFreeStatus(address)
+  return bytesRemaining === null ? null : BigInt(bytesRemaining)
 }
 
 type FundStatus = TurboSubmitFundTxResponse['status']

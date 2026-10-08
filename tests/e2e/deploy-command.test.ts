@@ -13,6 +13,11 @@ describe(
       expect(result.error).toBeUndefined()
     })
 
+    it('should show keygen help message', async () => {
+      const result = await runCommand(['keygen', '--help'])
+      expect(result.error).toBeUndefined()
+    })
+
     it('should show upload help message', async () => {
       const result = await runCommand(['upload', '--help'])
       expect(result.error).toBeUndefined()

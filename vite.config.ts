@@ -9,6 +9,7 @@ export default defineConfig({
       entry: {
         index: resolve(__dirname, 'src/index.ts'),
         'commands/deploy': resolve(__dirname, 'src/commands/deploy.ts'),
+        'commands/keygen': resolve(__dirname, 'src/commands/keygen.ts'),
         'commands/upload': resolve(__dirname, 'src/commands/upload.ts'),
       },
       formats: ['es'],
