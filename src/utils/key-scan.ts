@@ -237,6 +237,14 @@ export function createKeyScanner(
   }
 }
 
+/** True when text holds a needle as it is, with hex in lower or upper case. */
+function holdsKeyVerbatim(view: string, scanner: KeyScanner): boolean {
+  return (
+    scanner.text.some((needle) => view.includes(needle)) ||
+    scanner.hex.some((needle) => view.includes(needle) || view.includes(needle.toUpperCase()))
+  )
+}
+
 /** True when text, with whitespace removed, holds a needle. */
 function holdsKey(view: string, scanner: KeyScanner): boolean {
   if (scanner.text.length === 0 && scanner.hex.length === 0) return false
@@ -467,14 +475,17 @@ class StreamSearch {
 
     const views = [window.toString('latin1')]
     if (this.encoding) views.push(decodeUtf16(window, this.encoding))
-    if (views.some((view) => holdsKey(view, this.scanner))) return { kind: 'held' }
 
     /*
      * A piece with zero bytes that is not UTF-16 is binary (an image, a
-     * font): the shape checks look for text, and running them over binary
-     * data costs most of the scan. The held keys are still searched.
+     * font). Text in it is searched as it is, without removing whitespace
+     * and without the shape checks, which cost most of the scan there.
      */
-    if (!this.encoding && read.includes(0)) return undefined
+    if (!this.encoding && read.includes(0)) {
+      return holdsKeyVerbatim(views[0], this.scanner) ? { kind: 'held' } : undefined
+    }
+
+    if (views.some((view) => holdsKey(view, this.scanner))) return { kind: 'held' }
     for (const view of views) {
       const reason = textReason(view)
       if (reason) return { kind: 'generic', reason }
