@@ -418,17 +418,26 @@ Symlinks inside the deploy folder are followed only while they point inside it; 
 
 #### Files that are never uploaded
 
+The check is built to stop a key from being published by accident. It cannot promise to find a key that someone disguises on purpose (reversed, split across files, or in an encoding of their own), so keep keys outside the project folder.
+
 Before any request is made, `deploy` and `upload` list the files once, read every one of them and refuse to publish a private key. Only the files that were checked are uploaded. The error names the file and never prints the key. There is no flag to override this.
 
-**Keys the run holds.** Every key the command was given (`--wallet`, `--arns-wallet`, `--private-key`, `--arns-private-key`, `DEPLOY_KEY` and `ARNS_KEY`, whichever are set) is searched for in every file and every file name. The search covers the key's raw bytes, hex in any case, base64 and base64url (also percent-encoded or with `\/`), base58, a decimal byte list such as `[12, 34, ...]`, an Arweave key's private JWK fields and the base64 JWK that `DEPLOY_KEY` holds. Files are searched at any size, as UTF-16 too, with spaces and line breaks removed, and gzip, brotli (`.br`) and zip files are searched after they are decompressed. A compressed file that expands to more than 1 GiB, is damaged, is encrypted or uses a format the check cannot read is refused, because it could not be checked. The run also stops when a wallet file, or a hard link or symlink to one, is inside the deploy folder or is the `--deploy-file`.
+**Keys the run holds.** Every key the command was given (`--wallet`, `--arns-wallet`, `--private-key`, `--arns-private-key`, `DEPLOY_KEY` and `ARNS_KEY`, whichever are set) is searched for in every file and every file name. The search covers:
 
-**Keys the run does not hold.** The run also stops on what can be proved to be a private key:
+- the key's raw bytes, hex in any case (also as `0x0c, 0x22`, `\x0c\x22` or `0c:22`), a decimal byte list such as `[12, 34, ...]`, base58, and base64 or base64url at any alignment
+- an Arweave key's private JWK fields, the base64 JWK that `DEPLOY_KEY` holds, and each key file base64-encoded, as in a `data:` URI
+- text with spaces, line breaks, string concatenation, `\u`, `\x` and percent escapes removed, UTF-16 text, every string of a JSON file, and printable text inside binary files
 
-- any file whose name starts with `.env`
-- a Solana keypair written as a byte array, base58 or hex, anywhere in a text file or file name, checked by deriving its public half from its seed
-- an object with a private exponent `d` and a modulus `n`, as JSON, inside a string or base64-encoded
+Gzip, brotli (`.br`), zip and tar files are opened and searched, including archives inside archives up to three levels deep. A compressed file is refused as one that could not be checked when it expands to more than 1 GiB, is nested deeper, is damaged or encrypted, or is a 7z, RAR, xz, bzip2, Zstandard or cabinet archive. The run also stops when a wallet file, or a hard link or symlink to one, is inside the deploy folder or is the `--deploy-file`.
 
-What is not detected for a key the run does not hold: PEM files, a 32-byte seed or an Ethereum key on its own in any form (it cannot be told from a hash), keys inside binary files, and keys split across strings. Check your build for those yourself.
+**Keys the run does not hold.** The run also stops on what can be proved to be a private key, in files and inside the archives above:
+
+- an environment file: `.env`, `.env.local`, `.env.example`, `prod.env`, in any case (scripts and pages such as `env.js` are not refused for their name)
+- a PEM private key block (`-----BEGIN PRIVATE KEY-----` and the RSA, EC, DSA, OPENSSH and ENCRYPTED forms); public keys and certificates are not refused
+- a Solana keypair written as a byte array, base58 or hex, checked by deriving its public half from its seed
+- an object with a private exponent `d` and an RSA-sized modulus `n` (2048 bits or more) together, as JSON, inside a string or base64-encoded
+
+What is not detected for a key the run does not hold: a 32-byte seed or an Ethereum key on its own in any form (it cannot be told from a hash), brotli data without a `.br` name, and keys inside compressed parts of other formats, such as PNG text chunks or PDF streams.
 
 `.git` folders are left out of folder uploads, with a one-line note.
 
