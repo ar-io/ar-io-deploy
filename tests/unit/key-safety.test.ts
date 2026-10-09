@@ -1,15 +1,17 @@
+import crypto from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
 import { captureOutput } from '@oclif/test'
+import bs58 from 'bs58'
 import { http, HttpResponse } from 'msw'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import Deploy from '../../src/commands/deploy.js'
 import Upload from '../../src/commands/upload.js'
 import { getAllFiles } from '../../src/utils/cache.js'
-import { isSameOrInside, keyFileInUpload, looksLikePrivateKey } from '../../src/utils/key-safety.js'
+import { isSameOrInside, keyFileInUpload } from '../../src/utils/key-safety.js'
 import { generateSolanaWallet } from '../../src/utils/keygen.js'
 import { planFileUpload, planFolderUpload } from '../../src/utils/uploader.js'
 import { server } from '../setup.js'
@@ -40,31 +42,11 @@ function site(files: Record<string, string>): string {
   return folder
 }
 
-describe('looksLikePrivateKey', () => {
-  it('recognizes a Solana id.json and an Arweave JWK, with whitespace or a BOM', () => {
-    expect(looksLikePrivateKey(solanaIdJson())).toBe(true)
-    expect(looksLikePrivateKey(`\uFEFF\n  ${solanaIdJson()}\n`)).toBe(true)
-    expect(looksLikePrivateKey(arweaveJwk)).toBe(true)
-    expect(looksLikePrivateKey(JSON.stringify({ d: 'x', kty: 'RSA' }))).toBe(true)
-  })
-
-  it('leaves ordinary JSON alone', () => {
-    expect(looksLikePrivateKey(JSON.stringify(Array.from({ length: 63 }, () => 1)))).toBe(false)
-    expect(looksLikePrivateKey(JSON.stringify(Array.from({ length: 64 }, () => 256)))).toBe(false)
-    expect(looksLikePrivateKey(JSON.stringify(Array.from({ length: 64 }, () => 1.5)))).toBe(false)
-    // A public JWK has no private fields.
-    expect(looksLikePrivateKey(JSON.stringify({ e: 'AQAB', kty: 'RSA', n: 'y' }))).toBe(false)
-    expect(looksLikePrivateKey('{"name":"app"}')).toBe(false)
-    expect(looksLikePrivateKey('<html></html>')).toBe(false)
-    expect(looksLikePrivateKey('[1, 2,')).toBe(false)
-  })
-})
-
 describe('planFolderUpload', () => {
   it('refuses a folder holding a Solana id.json under any name', async () => {
     const folder = site({ 'assets/data.txt': solanaIdJson(), 'index.html': '<p>hi</p>' })
     await expect(planFolderUpload(folder)).rejects.toThrow(
-      'assets/data.txt looks like a private key and will not be published',
+      /^assets\/data\.txt looks like a private key \(.*\) and will not be published/,
     )
   })
 
@@ -217,6 +199,58 @@ describe('the commands', () => {
     )
 
     expect(error?.message).toMatch(/old-wallet\.json looks like a private key/)
+    expect(seen.requests).toEqual([])
+  })
+
+  it('upload refuses a copy of the DEPLOY_KEY it reads from the environment', async () => {
+    const seen = forbidNetwork()
+    // A bare 64-character hex value passes the shape checks; only the held key can match it.
+    const evmKey = crypto.randomBytes(32).toString('hex')
+    const folder = site({ 'index.html': '<p>hi</p>', 'notes.txt': evmKey })
+    const previous = process.env.DEPLOY_KEY
+    process.env.DEPLOY_KEY = `0x${evmKey}`
+    try {
+      const { error } = await captureOutput(() =>
+        Upload.run(['--sig-type', 'ethereum', '--deploy-folder', folder]),
+      )
+
+      expect(error?.message).toMatch(/notes\.txt contains the private key of a wallet/)
+      expect(error?.message).not.toContain(evmKey)
+      expect(seen.requests).toEqual([])
+    } finally {
+      if (previous === undefined) delete process.env.DEPLOY_KEY
+      else process.env.DEPLOY_KEY = previous
+    }
+  })
+
+  it('deploy refuses a copy of the ArNS wallet before the ArNS lookup', async () => {
+    const seen = forbidNetwork()
+    const arnsWallet = path.join(dir, 'arns.json')
+    const idJson = solanaIdJson()
+    fs.writeFileSync(arnsWallet, idJson)
+    const folder = site({
+      'index.html': '<p>hi</p>',
+      'k.txt': bs58.encode(Buffer.from(JSON.parse(idJson)).subarray(0, 32)),
+    })
+    const wallet = path.join(dir, 'id.json')
+    fs.writeFileSync(wallet, solanaIdJson())
+
+    const { error } = await captureOutput(() =>
+      Deploy.run([
+        '--sig-type',
+        'solana',
+        '--wallet',
+        wallet,
+        '--deploy-folder',
+        folder,
+        '--arns-name',
+        'example',
+        '--arns-wallet',
+        arnsWallet,
+      ]),
+    )
+
+    expect(error?.message).toMatch(/k\.txt contains the private key of a wallet/)
     expect(seen.requests).toEqual([])
   })
 })

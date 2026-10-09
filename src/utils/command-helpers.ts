@@ -7,12 +7,15 @@
  */
 
 import fs from 'node:fs'
+import path from 'node:path'
 
 import type { UploadWorkflowConfig, UploadWorkflowResult } from '../workflows/upload-workflow.js'
+import { getAllFiles } from './cache.js'
 import { chalk } from './chalk.js'
 import { deployKeyFromPrivateKey, deployKeyFromWalletFile } from './deploy-key.js'
 import { type DisplayRow, formatUploadError } from './display.js'
 import { keyFileInUpload } from './key-safety.js'
+import { assertNoPrivateKeys, createKeyScanner } from './key-scan.js'
 import { expandPath } from './path.js'
 import { validateIncrementalDedupe } from './validators.js'
 
@@ -101,6 +104,52 @@ export function refuseWalletInUpload(
   )
   if (problem) {
     throw new WorkflowError(problem)
+  }
+}
+
+/** A wallet file's contents, or undefined when it is missing or not a plausible key file. */
+function readKeyFile(file: string): string | undefined {
+  try {
+    return fs.statSync(file).size <= 1024 * 1024 ? fs.readFileSync(file, 'utf8') : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Search everything about to be uploaded for every key this run holds, and
+ * for anything else shaped like a private key, before any network request.
+ *
+ * @param keys - Wallet file paths, and key strings from flags and resolved
+ *   keys. `DEPLOY_KEY` and `ARNS_KEY` are always included when set.
+ * @throws A `WorkflowError` naming the file, never the key.
+ */
+export async function refuseKeysInUpload(
+  config: Pick<UploadWorkflowConfig, 'deploy-file' | 'deploy-folder'>,
+  keys: { privateKeys: Array<string | undefined>; walletPaths: Array<string | undefined> },
+): Promise<void> {
+  const walletFiles = keys.walletPaths.flatMap((walletPath) =>
+    walletPath ? [expandPath(walletPath)] : [],
+  )
+  const scanner = createKeyScanner(
+    [
+      ...walletFiles.map((file) => readKeyFile(file)),
+      ...keys.privateKeys,
+      process.env.DEPLOY_KEY,
+      process.env.ARNS_KEY,
+    ],
+    walletFiles,
+  )
+
+  const deployFile = config['deploy-file']
+  const folder = expandPath(config['deploy-folder'])
+  try {
+    const files = deployFile
+      ? [{ fullPath: expandPath(deployFile), name: deployFile }]
+      : getAllFiles(folder).map((name) => ({ fullPath: path.join(folder, name), name }))
+    await assertNoPrivateKeys(files, scanner)
+  } catch (error) {
+    throw new WorkflowError(error instanceof Error ? error.message : String(error))
   }
 }
 

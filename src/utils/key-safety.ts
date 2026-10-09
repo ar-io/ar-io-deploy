@@ -1,77 +1,11 @@
 /**
- * Keep private keys out of uploads. An Arweave upload is permanent and public,
- * so a wallet file that lands in the upload set can never be taken back: its
- * funds and its ArNS names belong to anyone who reads it.
- *
- * Two checks, both before any network call:
- * - a wallet file named with `--wallet` or `--arns-wallet` must not be inside
- *   the deploy folder, or be the `--deploy-file`;
- * - no file in the upload set may parse as a private key, whatever its name.
- *
- * The content check covers the two JSON shapes this CLI reads: a Solana
- * `id.json` (a JSON array of exactly 64 bytes) and an Arweave JWK. It does
- * not recognize keys stored as PEM, hex or base58 text.
+ * Keep wallet files out of uploads by where they are: a wallet named with
+ * `--wallet` or `--arns-wallet` must not be inside the deploy folder, or be
+ * the `--deploy-file`. What is inside each file is checked by `key-scan.ts`.
  */
 
 import fs from 'node:fs'
 import path from 'node:path'
-
-/**
- * Files larger than this are not read for the content check. A Solana
- * id.json is under 300 bytes and a 4096-bit Arweave JWK is about 3.3 KiB.
- */
-export const KEY_SCAN_MAX_BYTES = 64 * 1024
-
-/** True when `content` is a Solana id.json or an Arweave JWK private key. */
-export function looksLikePrivateKey(content: string): boolean {
-  const trimmed = content.replace(/^\uFEFF/, '').trim()
-  if (!trimmed.startsWith('[') && !trimmed.startsWith('{')) {
-    return false
-  }
-
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(trimmed)
-  } catch {
-    return false
-  }
-
-  if (Array.isArray(parsed)) {
-    return (
-      parsed.length === 64 &&
-      parsed.every((byte) => Number.isInteger(byte) && byte >= 0 && byte <= 255)
-    )
-  }
-
-  if (parsed && typeof parsed === 'object') {
-    const jwk = parsed as Record<string, unknown>
-    return jwk.kty === 'RSA' && ['d', 'p', 'q'].some((field) => typeof jwk[field] === 'string')
-  }
-
-  return false
-}
-
-function privateKeyMessage(name: string): string {
-  return `${name} looks like a private key and will not be published. Arweave uploads are permanent and public. Move the file out of what you upload.`
-}
-
-/**
- * Refuse a file that parses as a private key.
- *
- * @param fullPath - The file on disk.
- * @param name - How to name it in the error (a path relative to the folder).
- * @throws When the file looks like a private key.
- */
-export function assertNotPrivateKey(fullPath: string, name: string): void {
-  const stats = fs.statSync(fullPath)
-  if (!stats.isFile() || stats.size > KEY_SCAN_MAX_BYTES) {
-    return
-  }
-
-  if (looksLikePrivateKey(fs.readFileSync(fullPath, 'utf8'))) {
-    throw new Error(privateKeyMessage(name))
-  }
-}
 
 /**
  * The real path of `file`, or, when it does not exist, the real path of the
@@ -112,6 +46,20 @@ export function isSameOrInside(
 }
 
 /**
+ * Whether two paths are one file: the same device and inode, which also
+ * catches a hard link that no path comparison can see.
+ */
+export function isSameFile(a: string, b: string): boolean {
+  try {
+    const first = fs.statSync(a, { bigint: true })
+    const second = fs.statSync(b, { bigint: true })
+    return first.ino !== 0n && first.dev === second.dev && first.ino === second.ino
+  } catch {
+    return false
+  }
+}
+
+/**
  * Refuse an upload that would publish one of the key files the command was
  * given. Paths are compared after resolving symlinks, so a link to the deploy
  * folder does not hide a wallet inside it.
@@ -131,7 +79,10 @@ export function keyFileInUpload(
 
   if (target.deployFile) {
     const file = realOrResolved(target.deployFile)
-    const match = wallets.find((wallet) => isSameOrInside(realOrResolved(wallet), file))
+    const match = wallets.find(
+      (wallet) =>
+        isSameOrInside(realOrResolved(wallet), file) || isSameFile(wallet, target.deployFile!),
+    )
     return match
       ? `${target.deployFile} is the wallet file ${match}. A wallet will not be published: Arweave uploads are permanent and public.`
       : undefined

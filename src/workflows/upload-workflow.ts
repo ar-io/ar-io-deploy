@@ -20,6 +20,7 @@ import {
   createChainIndex,
   ownerAddressFromPublicKey,
 } from '../utils/incremental.js'
+import type { KeyScanner } from '../utils/key-scan.js'
 import { expandPath } from '../utils/path.js'
 import { createSigner } from '../utils/signer.js'
 import {
@@ -92,6 +93,8 @@ export interface UploadWorkflowIo {
   tokenTools?: TokenTools
   /** How long to wait for a top-up to be credited; tests shorten it. */
   fundingPoll?: PollOptions
+  /** Every key the command holds, searched for in each file before planning. */
+  keyScanner?: false | KeyScanner
 }
 
 /**
@@ -473,6 +476,7 @@ export async function runUploadWorkflow(
       filePlan = await planFileUpload(expandPath(deployFile), {
         cache: useCache ? loadCache(scope) : undefined,
         compression,
+        keyScanner: io.keyScanner,
       })
       spinner.succeed(
         filePlan.cached
@@ -498,6 +502,7 @@ export async function runUploadWorkflow(
         compression,
         fallbackFile: config['fallback-file'],
         incremental,
+        keyScanner: io.keyScanner,
       })
 
       const { cacheHits, duplicates, files, recovered, uploadBytes } = folderPlan

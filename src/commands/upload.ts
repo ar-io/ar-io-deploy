@@ -7,6 +7,7 @@ import {
   canPrompt,
   isPromptCancel,
   MISSING_UPLOAD_KEY,
+  refuseKeysInUpload,
   refuseWalletInUpload,
   reportFailure,
   resolveKey,
@@ -78,8 +79,17 @@ export default class Upload extends Command {
         walletPath: key.wallet,
       })
 
+      await refuseKeysInUpload(config, {
+        privateKeys: [key.privateKey, deployKey],
+        walletPaths: [key.wallet],
+      })
+
       this.log(chalk.bold(chalk.cyan('\nStarting upload...\n')))
-      const result = await runUploadWorkflow(deployKey, config, workflowIo)
+      // Already searched above, so the workflow does not read every file twice.
+      const result = await runUploadWorkflow(deployKey, config, {
+        ...workflowIo,
+        keyScanner: false,
+      })
 
       this.log('')
       this.log(chalk.bold(chalk.green('Upload successful!')))

@@ -28,7 +28,7 @@ import {
   incrementalCacheKey,
   isArweaveId,
 } from './incremental.js'
-import { assertNotPrivateKey } from './key-safety.js'
+import { assertNoPrivateKeys, type KeyScanner } from './key-scan.js'
 import type { UploadClient } from './upload-types.js'
 
 /**
@@ -216,9 +216,15 @@ export interface FileUploadPlan {
  */
 export async function planFileUpload(
   filePath: string,
-  options?: { cache?: TransactionCache; compression?: CompressionConfig },
+  options?: {
+    cache?: TransactionCache
+    compression?: CompressionConfig
+    keyScanner?: false | KeyScanner
+  },
 ): Promise<FileUploadPlan> {
-  assertNotPrivateKey(filePath, filePath)
+  if (options?.keyScanner !== false) {
+    await assertNoPrivateKeys([{ fullPath: filePath, name: filePath }], options?.keyScanner)
+  }
 
   const contentType = mime.lookup(filePath) || 'application/octet-stream'
   const encoding =
@@ -396,6 +402,11 @@ export async function planFolderUpload(
     concurrency?: number
     fallbackFile?: string
     incremental?: IncrementalOptions
+    /**
+     * The run's keys, searched for in every file; omitted, only the shape
+     * checks run. `false` when the caller has already searched this set.
+     */
+    keyScanner?: false | KeyScanner
   },
 ): Promise<FolderUploadPlan> {
   const incremental = options?.incremental
@@ -408,8 +419,14 @@ export async function planFolderUpload(
   assertUploadableFolder(relativePaths, options?.fallbackFile)
 
   // Before anything is hashed, looked up or sent: a key is never published.
-  for (const relativePath of relativePaths) {
-    assertNotPrivateKey(path.join(folderPath, relativePath), relativePath)
+  if (options?.keyScanner !== false) {
+    await assertNoPrivateKeys(
+      relativePaths.map((relativePath) => ({
+        fullPath: path.join(folderPath, relativePath),
+        name: relativePath,
+      })),
+      options?.keyScanner,
+    )
   }
 
   /*

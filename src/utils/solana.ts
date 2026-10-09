@@ -1,5 +1,3 @@
-import { createPrivateKey, createPublicKey } from 'node:crypto'
-
 import { DEVNET_PROGRAM_IDS, DEVNET_RPC_URL, MAINNET_RPC_URL } from '@ar.io/sdk'
 import {
   type Address,
@@ -9,6 +7,8 @@ import {
   type KeyPairSigner,
 } from '@solana/kit'
 import bs58 from 'bs58'
+
+import { ed25519PublicKeyFromSeed } from './key-scan.js'
 
 type ClusterProgramIds = Partial<
   Record<'antProgramId' | 'arnsProgramId' | 'coreProgramId' | 'garProgramId', Address>
@@ -47,19 +47,6 @@ export function solanaDeployKeyFromString(input: string): string {
   }
 
   return trimmed
-}
-
-/** PKCS#8 DER header for an ed25519 private key; the 32-byte seed follows it. */
-const ED25519_PKCS8_PREFIX = Buffer.from('302e020100300506032b657004220420', 'hex')
-
-/** The ed25519 public key for a 32-byte seed. */
-export function ed25519PublicKeyFromSeed(seed: Uint8Array): Buffer {
-  const privateKey = createPrivateKey({
-    format: 'der',
-    key: Buffer.concat([ED25519_PKCS8_PREFIX, seed]),
-    type: 'pkcs8',
-  })
-  return Buffer.from(createPublicKey(privateKey).export({ format: 'jwk' }).x as string, 'base64url')
 }
 
 /**
