@@ -26,7 +26,7 @@
 import { createPrivateKey, createPublicKey } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
-import type { Readable } from 'node:stream'
+import { Readable } from 'node:stream'
 import zlib from 'node:zlib'
 
 import bs58 from 'bs58'
@@ -80,6 +80,25 @@ export interface KeyScanner {
 
 const MIN_NEEDLE = 24
 
+/**
+ * Base64 and base64url needles for bytes stored at any alignment. Base64
+ * works in groups of three bytes, so bytes that start one or two bytes into
+ * a group encode differently; skipping the first group leaves characters
+ * that depend on these bytes alone.
+ */
+function base64Needles(bytes: Buffer): string[] {
+  const needles: string[] = []
+  for (const offset of [0, 1, 2]) {
+    const shifted = Buffer.concat([Buffer.alloc(offset), bytes.subarray(0, 33)])
+    const start = offset === 0 ? 0 : 4
+    for (const encoding of ['base64', 'base64url'] as const) {
+      needles.push(shifted.toString(encoding).slice(start, start + 40))
+    }
+  }
+
+  return needles
+}
+
 /** Every text encoding a secret could be stored in, as needles of a useful length. */
 function encodingsOf(secret: Uint8Array): { hex: string[]; text: string[] } {
   const bytes = Buffer.from(secret)
@@ -92,7 +111,7 @@ function encodingsOf(secret: Uint8Array): { hex: string[]; text: string[] } {
     b64.replaceAll('/', String.raw`\/`),
     b64.replaceAll('+', '%2B').replaceAll('/', '%2F'),
     b64.replaceAll('+', '%2b').replaceAll('/', '%2f'),
-    head30.toString('base64url'),
+    ...base64Needles(bytes),
     b58.length > 64 ? b58.slice(0, 64) : b58,
     // A byte list, `[12,34,...]` or `Uint8Array.from([12, 34, ...])`, once spaces are removed.
     [...bytes.subarray(0, 16)].join(','),
@@ -186,6 +205,18 @@ function secretsOf(key: string): { secrets: Uint8Array[]; text: string[] } {
     text.push(trimmed.slice(0, 64).replaceAll(/\s/g, ''))
   }
 
+  // The file or string itself base64-encoded, as in a data: URI.
+  if (trimmed.length >= 30) {
+    text.push(...base64Needles(Buffer.from(trimmed)))
+    if (trimmed.startsWith('[')) {
+      try {
+        text.push(...base64Needles(Buffer.from(JSON.stringify(JSON.parse(trimmed)))))
+      } catch {
+        // Not JSON.
+      }
+    }
+  }
+
   return { secrets, text }
 }
 
@@ -245,14 +276,44 @@ function holdsKeyVerbatim(view: string, scanner: KeyScanner): boolean {
   )
 }
 
-/** True when text, with whitespace removed, holds a needle. */
+/** `"abc" +` and a line break and `"def"`: a string split across lines in code. */
+const CONCATENATION = /(["'`])\s*\+\s*\1/g
+const WHITESPACE = /[\t\n\r ]+/g
+const ESCAPED_WHITESPACE = /\\[nrt]/g
+const UNICODE_ESCAPE = /\\u([\dA-Fa-f]{4})/g
+const HEX_ESCAPE = /\\x([\dA-Fa-f]{2})/g
+const PERCENT_ESCAPE = /%([\dA-Fa-f]{2})/g
+/** What sits between the bytes of a hex list: `0x0c, 0x22`, `\x0c\x22`, `0c:22`. */
+const HEX_SEPARATORS = /0x|\\x|[\s"',:[\]-]/g
+
+const fromHex = (_: string, hex: string): string => String.fromCodePoint(Number.parseInt(hex, 16))
+
+/** Escapes decoded and escaped line breaks removed, so a key written inside a string is plain. */
+function unescape(flat: string): string {
+  return flat
+    .replaceAll(ESCAPED_WHITESPACE, '')
+    .replaceAll(UNICODE_ESCAPE, fromHex)
+    .replaceAll(HEX_ESCAPE, fromHex)
+    .replaceAll(PERCENT_ESCAPE, fromHex)
+}
+
+/**
+ * True when text holds a needle once whitespace, line breaks and string
+ * concatenation are removed, once escapes are decoded, or, for hex, once the
+ * separators of a byte list are removed and case is ignored.
+ */
 function holdsKey(view: string, scanner: KeyScanner): boolean {
   if (scanner.text.length === 0 && scanner.hex.length === 0) return false
-  const flat = view.replaceAll(/[\t\n\r ]+/g, '')
+  const flat = view.replaceAll(CONCATENATION, '').replaceAll(WHITESPACE, '')
   if (scanner.text.some((needle) => flat.includes(needle))) return true
+  if (flat.includes('\\') || flat.includes('%')) {
+    const decoded = unescape(flat)
+    if (scanner.text.some((needle) => decoded.includes(needle))) return true
+  }
+
   if (scanner.hex.length === 0) return false
-  const lower = flat.toLowerCase()
-  return scanner.hex.some((needle) => lower.includes(needle))
+  const hex = flat.toLowerCase().replaceAll(HEX_SEPARATORS, '')
+  return scanner.hex.some((needle) => hex.includes(needle))
 }
 
 const B58 = '1-9A-HJ-NP-Za-km-z'
@@ -261,8 +322,12 @@ const BYTE_ARRAY_64 = new RegExp(String.raw`\[(?:${BYTE},){63}${BYTE}\]`, 'g')
 const BASE58_KEY = new RegExp(`^[${B58}]{86,88}$`)
 const HEX_KEY = /^(?:0x)?[\dA-Fa-f]{128}$/
 const JWK_D = /\\?["']d\\?["']\s*:\s*\\?["'][\w-]{40,}/g
-const JWK_N = /\\?["']n\\?["']\s*:\s*\\?["'][\w-]{40,}/
+/** A modulus of 2048 bits or more: at least 342 base64url characters. */
+const JWK_N = /\\?["']n\\?["']\s*:\s*\\?["'][\w-]{340,}/
 const BASE64_JSON = /eyJ[\w+/-]{100,}={0,2}/g
+const PEM_PRIVATE_KEY = /-----BEGIN (?:RSA |EC |DSA |OPENSSH |ENCRYPTED )?PRIVATE KEY-----/
+/** Runs of printable text inside binary data. */
+const PRINTABLE_RUN = /[\t\n\r -~]{40,}/g
 
 /**
  * Runs of letters and digits 86 to 130 characters long: the lengths of a
@@ -310,9 +375,9 @@ function solanaKeypairToken(text: string): string | undefined {
 }
 
 /**
- * True when a `d` field and an `n` field sit in the same flat object. JWK
- * values are base64url and hold no braces, so the object around `d` runs
- * from the nearest `{` before it to the nearest `}` after it.
+ * True when a `d` field and an RSA-sized `n` field sit in the same flat
+ * object. JWK values are base64url and hold no braces, so the object around
+ * `d` runs from the nearest `{` before it to the nearest `}` after it.
  */
 function jwkInText(text: string): boolean {
   for (const match of text.matchAll(JWK_D)) {
@@ -326,6 +391,8 @@ function jwkInText(text: string): boolean {
 
 /** Why a piece of text holds a key the run does not know, or undefined. */
 function textReason(text: string): string | undefined {
+  if (PEM_PRIVATE_KEY.test(text)) return 'a PEM private key'
+
   for (const match of text.matchAll(BYTE_ARRAY_64)) {
     const bytes = match[0]
       .slice(1, -1)
@@ -365,13 +432,29 @@ function isKeypairArray(value: unknown[]): boolean {
 }
 
 const BASE64URL_VALUE = /^[\w-]{40,}$/
+const RSA_MODULUS = /^[\w-]{340,}$/
 
-/** Why a parsed JSON value holds a key, or undefined. Walks every depth. */
-function jsonReason(value: unknown, depth = 0): string | undefined {
-  if (depth > 64 || value === null || typeof value !== 'object') {
-    if (typeof value === 'string' && value.length > 40 && /^\s*[[{]/.test(value)) {
+export type ScanFinding =
+  | { kind: 'generic'; reason: string }
+  | { kind: 'held' }
+  | { kind: 'unchecked'; reason: string }
+
+/**
+ * Why a parsed JSON value holds a key, or undefined. Walks every depth, and
+ * searches every string as text, so a key inside an escaped string (a source
+ * map's `sourcesContent`) is found.
+ */
+function jsonFinding(value: unknown, scanner: KeyScanner, depth = 0): ScanFinding | undefined {
+  if (depth > 64 || value === null) return undefined
+  if (typeof value === 'string') {
+    if (value.length < 40) return undefined
+    if (holdsKey(value, scanner)) return { kind: 'held' }
+    // Also with whitespace removed: a byte list folded across lines can split a number.
+    const reason = textReason(value) ?? textReason(value.replaceAll(WHITESPACE, ''))
+    if (reason) return { kind: 'generic', reason }
+    if (/^\s*[[{]/.test(value)) {
       try {
-        return jsonReason(JSON.parse(value), depth + 1)
+        return jsonFinding(JSON.parse(value), scanner, depth + 1)
       } catch {
         return undefined
       }
@@ -380,11 +463,13 @@ function jsonReason(value: unknown, depth = 0): string | undefined {
     return undefined
   }
 
+  if (typeof value !== 'object') return undefined
   if (Array.isArray(value)) {
-    if (isKeypairArray(value)) return 'a Solana keypair as a byte array'
+    if (isKeypairArray(value))
+      return { kind: 'generic', reason: 'a Solana keypair as a byte array' }
     for (const entry of value) {
-      const reason = jsonReason(entry, depth + 1)
-      if (reason) return reason
+      const finding = jsonFinding(entry, scanner, depth + 1)
+      if (finding) return finding
     }
 
     return undefined
@@ -395,14 +480,14 @@ function jsonReason(value: unknown, depth = 0): string | undefined {
     typeof d === 'string' &&
     typeof n === 'string' &&
     BASE64URL_VALUE.test(d) &&
-    BASE64URL_VALUE.test(n)
+    RSA_MODULUS.test(n)
   ) {
-    return 'a JWK private key'
+    return { kind: 'generic', reason: 'a JWK private key' }
   }
 
   for (const entry of Object.values(value)) {
-    const reason = jsonReason(entry, depth + 1)
-    if (reason) return reason
+    const finding = jsonFinding(entry, scanner, depth + 1)
+    if (finding) return finding
   }
 
   return undefined
@@ -411,10 +496,14 @@ function jsonReason(value: unknown, depth = 0): string | undefined {
 const CHUNK_BYTES = 1024 * 1024
 /** Longer than any single needle or pattern, so nothing is lost at a chunk edge. */
 const OVERLAP_BYTES = 16 * 1024
-/** JSON files up to this size are also parsed and walked. */
+/** JSON up to this size is also parsed and walked. */
 const JSON_PARSE_MAX_BYTES = 32 * 1024 * 1024
 /** The most a compressed file may expand to before it is refused as uncheckable. */
 export const DECOMPRESSED_MAX_BYTES = 1024 * 1024 * 1024
+/** The largest archive inside another that is held in memory to be read. */
+const NESTED_ARCHIVE_MAX_BYTES = 256 * 1024 * 1024
+/** Archives inside archives are opened this many layers deep. */
+const MAX_DEPTH = 3
 
 type Encoding = 'utf16be' | 'utf16le' | undefined
 
@@ -441,11 +530,6 @@ function decodeUtf16(window: Buffer, encoding: 'utf16be' | 'utf16le'): string {
   if (encoding === 'utf16le') return even.toString('utf16le')
   return Buffer.from(even).swap16().toString('utf16le')
 }
-
-export type ScanFinding =
-  | { kind: 'generic'; reason: string }
-  | { kind: 'held' }
-  | { kind: 'unchecked'; reason: string }
 
 /**
  * Searches a byte stream fed to it in pieces. Each piece is searched together
@@ -478,11 +562,13 @@ class StreamSearch {
 
     /*
      * A piece with zero bytes that is not UTF-16 is binary (an image, a
-     * font). Text in it is searched as it is, without removing whitespace
-     * and without the shape checks, which cost most of the scan there.
+     * font, a wasm module). It is searched as it is, and its runs of
+     * printable text get the full checks; running them over all of the
+     * binary data would cost most of the scan.
      */
     if (!this.encoding && read.includes(0)) {
-      return holdsKeyVerbatim(views[0], this.scanner) ? { kind: 'held' } : undefined
+      if (holdsKeyVerbatim(views[0], this.scanner)) return { kind: 'held' }
+      views[0] = [...views[0].matchAll(PRINTABLE_RUN)].map(([run]) => run).join('\n')
     }
 
     if (views.some((view) => holdsKey(view, this.scanner))) return { kind: 'held' }
@@ -495,13 +581,161 @@ class StreamSearch {
   }
 }
 
-/** Search a stream, in pieces of about {@link CHUNK_BYTES}, within a byte budget. */
-async function searchStream(
+/** Read access to a file or to bytes in memory, for archive formats that need it. */
+interface Reader {
+  read(offset: number, length: number): Promise<Buffer>
+  size: number
+  stream(start: number, end: number): Readable
+}
+
+function fileReader(handle: fs.promises.FileHandle, fullPath: string, size: number): Reader {
+  return {
+    async read(offset, length) {
+      const buffer = Buffer.alloc(Math.max(0, Math.min(length, size - offset)))
+      await handle.read(buffer, 0, buffer.length, offset)
+      return buffer
+    },
+    size,
+    stream: (start, end) => fs.createReadStream(fullPath, { end, start }),
+  }
+}
+
+function bufferReader(bytes: Buffer): Reader {
+  return {
+    read: async (offset, length) => bytes.subarray(offset, offset + length),
+    size: bytes.length,
+    stream: (start, end) => Readable.from([bytes.subarray(start, end + 1)]),
+  }
+}
+
+type Container = 'brotli' | 'gzip' | 'tar' | 'zip' | { unsupported: string }
+
+const SIGNATURES: Array<[string, Buffer]> = [
+  ['7z', Buffer.from([0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c])],
+  ['RAR', Buffer.from([0x52, 0x61, 0x72, 0x21, 0x1a, 0x07])],
+  ['xz', Buffer.from([0xfd, 0x37, 0x7a, 0x58, 0x5a, 0x00])],
+  ['Zstandard', Buffer.from([0x28, 0xb5, 0x2f, 0xfd])],
+  ['cabinet', Buffer.from([0x4d, 0x53, 0x43, 0x46, 0, 0, 0, 0])],
+]
+const BZIP2_BLOCK = Buffer.from([0x31, 0x41, 0x59, 0x26, 0x53, 0x59])
+const BZIP2_END = Buffer.from([0x17, 0x72, 0x45, 0x38, 0x50, 0x90])
+
+/** What kind of archive or compressed stream the bytes are, by signature; brotli by name. */
+function sniff(head: Buffer, name: string): Container | undefined {
+  if (head[0] === 0x1f && head[1] === 0x8b) return 'gzip'
+  if (head.readUInt32LE(0) === 0x04_03_4b_50) return 'zip'
+  if (head.length >= 262 && head.toString('latin1', 257, 262) === 'ustar') return 'tar'
+  for (const [format, signature] of SIGNATURES) {
+    if (head.subarray(0, signature.length).equals(signature)) return { unsupported: format }
+  }
+
+  const bzip2 =
+    head.toString('latin1', 0, 3) === 'BZh' &&
+    head[3] >= 0x31 &&
+    head[3] <= 0x39 &&
+    (head.subarray(4, 10).equals(BZIP2_BLOCK) || head.subarray(4, 10).equals(BZIP2_END))
+  if (bzip2) return { unsupported: 'bzip2' }
+  if (/\.br$/i.test(name)) return 'brotli'
+  return undefined
+}
+
+class TooLarge extends Error {}
+
+interface Context {
+  budget: { left: number; limit: number }
+  scanner: KeyScanner
+}
+
+/** Count what a decompressed or archived stream yields against the budget. */
+async function* counted(stream: Readable, context: Context): AsyncGenerator<Buffer> {
+  try {
+    for await (const chunk of stream) {
+      const buffer = chunk as Buffer
+      context.budget.left -= buffer.length
+      if (context.budget.left < 0) throw new TooLarge()
+      yield buffer
+    }
+  } finally {
+    stream.destroy()
+  }
+}
+
+async function* prepend(head: Buffer, rest: AsyncIterator<Buffer>): AsyncGenerator<Buffer> {
+  if (head.length > 0) yield head
+  for (let next = await rest.next(); !next.done; next = await rest.next()) yield next.value
+}
+
+/**
+ * Search content that came out of an archive or a decompressor: look at its
+ * first bytes, open it when it is itself an archive, and search it as a file
+ * when it is not.
+ */
+async function searchContent(
   stream: Readable,
-  scanner: KeyScanner,
-  budget: { left: number; limit: number },
+  name: string,
+  context: Context,
+  depth: number,
 ): Promise<ScanFinding | undefined> {
-  const search = new StreamSearch(scanner)
+  const chunks = counted(stream, context)
+  const iterator = chunks[Symbol.asyncIterator]()
+  const headParts: Buffer[] = []
+  let headBytes = 0
+  while (headBytes < 1024) {
+    const next = await iterator.next()
+    if (next.done) break
+    headParts.push(next.value)
+    headBytes += next.value.length
+  }
+
+  const head = Buffer.concat(headParts)
+  const container = head.length >= 4 ? sniff(head, name) : undefined
+  if (container !== undefined) {
+    if (typeof container === 'object') {
+      return {
+        kind: 'unchecked',
+        reason: `${name} is a ${container.unsupported} archive, which this check cannot read`,
+      }
+    }
+
+    if (depth >= MAX_DEPTH) {
+      return { kind: 'unchecked', reason: `it holds archives nested more than ${MAX_DEPTH} deep` }
+    }
+
+    const content = Readable.from(prepend(head, iterator))
+    if (container === 'gzip' || container === 'brotli') {
+      const decompress = container === 'gzip' ? zlib.createGunzip() : zlib.createBrotliDecompress()
+      return searchContent(
+        content.pipe(decompress),
+        name.replace(/\.(?:gz|tgz|br)$/i, ''),
+        context,
+        depth + 1,
+      )
+    }
+
+    const parts: Buffer[] = []
+    let total = 0
+    for await (const part of content) {
+      total += (part as Buffer).length
+      if (total > NESTED_ARCHIVE_MAX_BYTES) {
+        return {
+          kind: 'unchecked',
+          reason: `${name} inside it is larger than ${NESTED_ARCHIVE_MAX_BYTES} bytes`,
+        }
+      }
+
+      parts.push(part as Buffer)
+    }
+
+    return searchArchive(bufferReader(Buffer.concat(parts)), container, context, depth + 1)
+  }
+
+  const search = new StreamSearch(context.scanner)
+  const keep: Buffer[] | undefined = /^[[{]/.test(
+    stripBom(head.toString('latin1', 0, 64)).trimStart(),
+  )
+    ? []
+    : undefined
+  let kept = 0
   let pending: Buffer[] = []
   let pendingBytes = 0
   const flush = (): ScanFinding | undefined => {
@@ -512,45 +746,48 @@ async function searchStream(
     return search.push(piece)
   }
 
-  try {
-    for await (const chunk of stream) {
-      const buffer = chunk as Buffer
-      budget.left -= buffer.length
-      if (budget.left < 0) {
-        return { kind: 'unchecked', reason: `it expands to more than ${budget.limit} bytes` }
-      }
-
-      pending.push(buffer)
-      pendingBytes += buffer.length
-      if (pendingBytes >= CHUNK_BYTES) {
-        const finding = flush()
-        if (finding) return finding
-      }
+  for await (const part of prepend(head, iterator)) {
+    if (keep && kept + part.length <= JSON_PARSE_MAX_BYTES) {
+      keep.push(part)
+      kept += part.length
     }
 
-    return flush()
-  } finally {
-    stream.destroy()
+    pending.push(part)
+    pendingBytes += part.length
+    if (pendingBytes >= CHUNK_BYTES) {
+      const finding = flush()
+      if (finding) return finding
+    }
+  }
+
+  const finding = flush()
+  if (finding) return finding
+  return keep ? parsedJsonFinding(Buffer.concat(keep), context.scanner) : undefined
+}
+
+/** Parse bytes as JSON and walk them; undefined when they are not JSON. */
+function parsedJsonFinding(bytes: Buffer, scanner: KeyScanner): ScanFinding | undefined {
+  const encoding = detectUtf16(bytes)
+  const text = stripBom(encoding ? decodeUtf16(bytes, encoding) : bytes.toString('utf8')).trim()
+  if (!text.startsWith('[') && !text.startsWith('{')) return undefined
+  try {
+    return jsonFinding(JSON.parse(text), scanner)
+  } catch {
+    return undefined
   }
 }
 
-interface ZipEntry {
-  compressedSize: number
-  dataStart: number
-  method: number
+interface Member {
   name: string
+  stream: () => Readable
 }
 
 /** The entries of a zip file from its central directory, or why they cannot be read. */
-async function zipEntries(
-  handle: fs.promises.FileHandle,
-  size: number,
-): Promise<string | ZipEntry[]> {
-  const tailLength = Math.min(size, 65_557)
-  const tail = Buffer.alloc(tailLength)
-  await handle.read(tail, 0, tailLength, size - tailLength)
+async function zipMembers(reader: Reader): Promise<Member[] | string> {
+  const tailLength = Math.min(reader.size, 65_557)
+  const tail = await reader.read(reader.size - tailLength, tailLength)
   let end = -1
-  for (let i = tailLength - 22; i >= 0; i--) {
+  for (let i = tail.length - 22; i >= 0; i--) {
     if (tail.readUInt32LE(i) === 0x06_05_4b_50) {
       end = i
       break
@@ -565,11 +802,10 @@ async function zipEntries(
     return 'ZIP64 archives are not supported'
   }
 
-  if (directoryOffset + directorySize > size) return 'it is not a readable zip file'
-  const directory = Buffer.alloc(directorySize)
-  await handle.read(directory, 0, directorySize, directoryOffset)
+  if (directoryOffset + directorySize > reader.size) return 'it is not a readable zip file'
+  const directory = await reader.read(directoryOffset, directorySize)
 
-  const entries: ZipEntry[] = []
+  const members: Member[] = []
   let at = 0
   for (let i = 0; i < count; i++) {
     if (at + 46 > directory.length || directory.readUInt32LE(at) !== 0x02_01_4b_50) {
@@ -588,94 +824,109 @@ async function zipEntries(
 
     if (name.endsWith('/')) continue
     if (flags % 2 === 1) return `${name} inside it is encrypted`
-    if (method !== 0 && method !== 8)
+    if (method !== 0 && method !== 8) {
       return `${name} inside it uses a compression method this check cannot read`
+    }
 
-    const local = Buffer.alloc(30)
-    await handle.read(local, 0, 30, localOffset)
-    if (local.readUInt32LE(0) !== 0x04_03_4b_50) return 'it is not a readable zip file'
+    const local = await reader.read(localOffset, 30)
+    if (local.length < 30 || local.readUInt32LE(0) !== 0x04_03_4b_50) {
+      return 'it is not a readable zip file'
+    }
+
     const dataStart = localOffset + 30 + local.readUInt16LE(26) + local.readUInt16LE(28)
-    entries.push({ compressedSize, dataStart, method, name })
+    members.push({
+      name,
+      stream() {
+        if (compressedSize === 0) return Readable.from([])
+        const raw = reader.stream(dataStart, dataStart + compressedSize - 1)
+        return method === 8 ? raw.pipe(zlib.createInflateRaw()) : raw
+      },
+    })
   }
 
-  return entries
+  return members
 }
 
-const GZIP_MAGIC = Buffer.from([0x1f, 0x8b])
-const ZIP_MAGIC = Buffer.from([0x50, 0x4b, 0x03, 0x04])
+/** A tar number field: octal text, or base-256 when the high bit is set. */
+function tarNumber(field: Buffer): number {
+  if (field[0] >= 0x80) {
+    let value = 0
+    for (let i = 1; i < field.length; i++) value = value * 256 + field[i]
+    return value
+  }
 
-/** Search what a compressed file expands to: gzip and zip by content, brotli by name. */
-async function searchCompressed(
-  file: {
-    fullPath: string
-    handle: fs.promises.FileHandle
-    /** The first bytes, for the signature. */
-    head: Buffer
-    name: string
-    size: number
-  },
-  scanner: KeyScanner,
+  return Number.parseInt(field.toString('latin1').replaceAll(/[\0 ]/g, '') || '0', 8)
+}
+
+const cString = (field: Buffer): string => {
+  const end = field.indexOf(0)
+  return field.toString('utf8', 0, end < 0 ? field.length : end)
+}
+
+/** The regular files of a tar archive (ustar, pax and GNU long names). */
+async function tarMembers(reader: Reader): Promise<Member[] | string> {
+  const members: Member[] = []
+  let offset = 0
+  let longName: string | undefined
+  while (offset + 512 <= reader.size) {
+    const header = await reader.read(offset, 512)
+    if (header.every((byte) => byte === 0)) break
+    const size = tarNumber(header.subarray(124, 136))
+    if (!Number.isFinite(size) || size < 0) return 'it is not a readable tar file'
+    const type = String.fromCodePoint(header[156])
+    const start = offset + 512
+    offset = start + Math.ceil(size / 512) * 512
+
+    if (type === 'L') {
+      longName = cString(await reader.read(start, size))
+      continue
+    }
+
+    const prefix = cString(header.subarray(345, 500))
+    const name = longName ?? (prefix ? `${prefix}/` : '') + cString(header.subarray(0, 100))
+    longName = undefined
+    if (type !== '0' && type !== '\0' && type !== '7') continue
+    members.push({
+      name,
+      stream: () => (size === 0 ? Readable.from([]) : reader.stream(start, start + size - 1)),
+    })
+  }
+
+  return members
+}
+
+/** Search every member of a zip or tar archive, its name and its content. */
+async function searchArchive(
+  reader: Reader,
+  kind: 'tar' | 'zip',
+  context: Context,
+  depth: number,
 ): Promise<ScanFinding | undefined> {
-  const { fullPath, handle, head, name, size } = file
-  const limit = scanner.decompressedMaxBytes ?? DECOMPRESSED_MAX_BYTES
-  const budget = { left: limit, limit }
-
-  if (head.subarray(0, 2).equals(GZIP_MAGIC)) {
-    const finding = await searchStream(
-      fs.createReadStream(fullPath).pipe(zlib.createGunzip()),
-      scanner,
-      budget,
-    ).catch((error: unknown) => ({
-      kind: 'unchecked' as const,
-      reason: `it could not be decompressed (${error instanceof Error ? error.message : String(error)})`,
-    }))
-    return finding
-  }
-
-  if (head.subarray(0, 4).equals(ZIP_MAGIC)) {
-    const entries = await zipEntries(handle, size)
-    if (typeof entries === 'string') return { kind: 'unchecked', reason: entries }
-    for (const entry of entries) {
-      if (nameHoldsKey(entry.name, scanner)) return { kind: 'held' }
-      if (entry.compressedSize === 0) continue
-      const raw = fs.createReadStream(fullPath, {
-        end: entry.dataStart + entry.compressedSize - 1,
-        start: entry.dataStart,
-      })
-      const finding = await searchStream(
-        entry.method === 8 ? raw.pipe(zlib.createInflateRaw()) : raw,
-        scanner,
-        budget,
-      ).catch((error: unknown) => ({
-        kind: 'unchecked' as const,
-        reason: `${entry.name} inside it could not be decompressed (${error instanceof Error ? error.message : String(error)})`,
-      }))
-      if (finding) return finding
-    }
-
-    return undefined
-  }
-
-  // Brotli has no signature. A .br file that does not decode is not brotli.
-  if (path.extname(name).toLowerCase() === '.br') {
-    try {
-      return await searchStream(
-        fs.createReadStream(fullPath).pipe(zlib.createBrotliDecompress()),
-        scanner,
-        budget,
-      )
-    } catch {
-      return undefined
-    }
+  const members = kind === 'zip' ? await zipMembers(reader) : await tarMembers(reader)
+  if (typeof members === 'string') return { kind: 'unchecked', reason: members }
+  for (const member of members) {
+    if (nameHoldsKey(member.name, context.scanner)) return { kind: 'held' }
+    const finding = await searchContent(member.stream(), member.name, context, depth)
+    if (finding) return finding
   }
 
   return undefined
 }
 
+/** Turn a failure while opening an archive into a refusal: what cannot be read is not published. */
+function uncheckable(error: unknown, budget: { limit: number }): ScanFinding {
+  if (error instanceof TooLarge) {
+    return { kind: 'unchecked', reason: `it expands to more than ${budget.limit} bytes` }
+  }
+
+  const message = error instanceof Error ? error.message : String(error)
+  return { kind: 'unchecked', reason: `it could not be decompressed (${message})` }
+}
+
 /**
  * Search one file. Reads it in chunks with an overlap, so a key anywhere in
- * a file of any size is found, then searches what it expands to when it is
- * compressed.
+ * a file of any size is found, then opens it when it is an archive or
+ * compressed, and searches what is inside.
  */
 export async function scanFile(
   fullPath: string,
@@ -696,7 +947,7 @@ export async function scanFile(
       if (bytesRead === 0) break
       const read = chunk.subarray(0, bytesRead)
       if (position === 0) {
-        head = Buffer.from(read.subarray(0, 64))
+        head = Buffer.from(read.subarray(0, 1024))
         const encoding = detectUtf16(read)
         // Only what could be JSON is kept whole, to be parsed at the end.
         const start = stripBom(
@@ -713,19 +964,39 @@ export async function scanFile(
     }
 
     if (keep) {
-      const encoding = detectUtf16(keep)
-      const trimmed = stripBom(
-        encoding ? decodeUtf16(keep, encoding) : keep.toString('utf8'),
-      ).trim()
-      try {
-        const reason = jsonReason(JSON.parse(trimmed))
-        if (reason) return { kind: 'generic', reason }
-      } catch {
-        // Not JSON.
+      const finding = parsedJsonFinding(keep, scanner)
+      if (finding) return finding
+    }
+
+    if (head.length < 4) return undefined
+    const container = sniff(head, name)
+    if (container === undefined) return undefined
+    if (typeof container === 'object') {
+      return {
+        kind: 'unchecked',
+        reason: `it is a ${container.unsupported} archive, which this check cannot read`,
       }
     }
 
-    return await searchCompressed({ fullPath, handle, head, name, size }, scanner)
+    const limit = scanner.decompressedMaxBytes ?? DECOMPRESSED_MAX_BYTES
+    const context: Context = { budget: { left: limit, limit }, scanner }
+    try {
+      if (container === 'zip' || container === 'tar') {
+        return await searchArchive(fileReader(handle, fullPath, size), container, context, 1)
+      }
+
+      const decompress = container === 'gzip' ? zlib.createGunzip() : zlib.createBrotliDecompress()
+      return await searchContent(
+        fs.createReadStream(fullPath).pipe(decompress),
+        name.replace(/\.(?:gz|tgz|br)$/i, ''),
+        context,
+        1,
+      )
+    } catch (error) {
+      // Brotli has no signature: a .br file that does not decode is not brotli.
+      if (container === 'brotli' && !(error instanceof TooLarge)) return undefined
+      return uncheckable(error, context.budget)
+    }
   } finally {
     await handle.close()
   }
@@ -742,6 +1013,16 @@ function redactedName(name: string, scanner: KeyScanner): string {
     .split('/')
     .map((segment) => (nameHoldsKey(segment, scanner) ? '[name hidden]' : segment))
     .join('/')
+}
+
+/**
+ * An environment file: `.env`, `.env.local`, `prod.env`, `.ENV`. Scripts and
+ * pages named like one (`env.js`, `env.html`) are runtime configuration
+ * that sites publish on purpose, so they are left to the content checks.
+ */
+function isEnvironmentFile(name: string): boolean {
+  const base = path.basename(name)
+  return /(?:^|\.)env(?:\.|$)/i.test(base) && !/\.(?:c?js|mjs|ts|map|html?|css|json)$/i.test(base)
 }
 
 const SCAN_CONCURRENCY = 8
@@ -786,7 +1067,7 @@ async function checkFile(
     return `A file name in the upload contains a private key: ${redactedName(file.name, scanner)}. It will not be published. ${PERMANENT} Rename or remove the file.`
   }
 
-  if (/^\.env/i.test(path.basename(file.name))) {
+  if (isEnvironmentFile(file.name)) {
     return `${file.name} is an environment file, which usually holds secrets, and will not be published. ${PERMANENT} Move it out of what you upload.`
   }
 
