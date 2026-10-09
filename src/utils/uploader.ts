@@ -209,6 +209,18 @@ export interface FileUploadPlan {
   uploadBytes: number
 }
 
+/** A folder's files, relative and `/`-separated, and the `.git` folders left out. */
+export interface ListedFolder {
+  relativePaths: string[]
+  skipped: string[]
+}
+
+/** List a folder once, for the key search and the plan to share. */
+export function listFolder(folderPath: string): ListedFolder {
+  const skipped: string[] = []
+  return { relativePaths: getAllFiles(folderPath, folderPath, skipped), skipped }
+}
+
 /**
  * Work out what uploading one file will send, without uploading: hash it,
  * check the cache, and compress it if it will be sent. Pricing this plan, not
@@ -402,11 +414,13 @@ export async function planFolderUpload(
     concurrency?: number
     fallbackFile?: string
     incremental?: IncrementalOptions
+    /** The run's keys, searched for in every file; omitted, only the shape checks run. */
+    keyScanner?: KeyScanner
     /**
-     * The run's keys, searched for in every file; omitted, only the shape
-     * checks run. `false` when the caller has already searched this set.
+     * The files the caller already listed and searched for keys. The plan
+     * uploads exactly these, so a file added after the search is never sent.
      */
-    keyScanner?: false | KeyScanner
+    listed?: ListedFolder
   },
 ): Promise<FolderUploadPlan> {
   const incremental = options?.incremental
@@ -414,12 +428,12 @@ export async function planFolderUpload(
   // Incremental mode always keeps a cache: it is where recovered ids go.
   const useCache = options?.cache !== undefined || incremental !== undefined
 
-  const skipped: string[] = []
-  const relativePaths = getAllFiles(folderPath, folderPath, skipped)
+  const listed = options?.listed ?? listFolder(folderPath)
+  const { relativePaths, skipped } = listed
   assertUploadableFolder(relativePaths, options?.fallbackFile)
 
   // Before anything is hashed, looked up or sent: a key is never published.
-  if (options?.keyScanner !== false) {
+  if (!options?.listed) {
     await assertNoPrivateKeys(
       relativePaths.map((relativePath) => ({
         fullPath: path.join(folderPath, relativePath),

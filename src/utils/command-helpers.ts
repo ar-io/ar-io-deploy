@@ -10,13 +10,13 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 import type { UploadWorkflowConfig, UploadWorkflowResult } from '../workflows/upload-workflow.js'
-import { getAllFiles } from './cache.js'
 import { chalk } from './chalk.js'
 import { deployKeyFromPrivateKey, deployKeyFromWalletFile } from './deploy-key.js'
 import { type DisplayRow, formatUploadError } from './display.js'
 import { keyFileInUpload } from './key-safety.js'
 import { assertNoPrivateKeys, createKeyScanner } from './key-scan.js'
 import { expandPath } from './path.js'
+import { type ListedFolder, listFolder } from './uploader.js'
 import { validateIncrementalDedupe } from './validators.js'
 
 /**
@@ -122,12 +122,13 @@ function readKeyFile(file: string): string | undefined {
  *
  * @param keys - Wallet file paths, and key strings from flags and resolved
  *   keys. `DEPLOY_KEY` and `ARNS_KEY` are always included when set.
+ * @returns What was searched, for the workflow to upload exactly that.
  * @throws A `WorkflowError` naming the file, never the key.
  */
 export async function refuseKeysInUpload(
   config: Pick<UploadWorkflowConfig, 'deploy-file' | 'deploy-folder'>,
   keys: { privateKeys: Array<string | undefined>; walletPaths: Array<string | undefined> },
-): Promise<void> {
+): Promise<'deploy-file' | ListedFolder> {
   const walletFiles = keys.walletPaths.flatMap((walletPath) =>
     walletPath ? [expandPath(walletPath)] : [],
   )
@@ -144,10 +145,17 @@ export async function refuseKeysInUpload(
   const deployFile = config['deploy-file']
   const folder = expandPath(config['deploy-folder'])
   try {
-    const files = deployFile
-      ? [{ fullPath: expandPath(deployFile), name: deployFile }]
-      : getAllFiles(folder).map((name) => ({ fullPath: path.join(folder, name), name }))
-    await assertNoPrivateKeys(files, scanner)
+    if (deployFile) {
+      await assertNoPrivateKeys([{ fullPath: expandPath(deployFile), name: deployFile }], scanner)
+      return 'deploy-file'
+    }
+
+    const listed = listFolder(folder)
+    await assertNoPrivateKeys(
+      listed.relativePaths.map((name) => ({ fullPath: path.join(folder, name), name })),
+      scanner,
+    )
+    return listed
   } catch (error) {
     throw new WorkflowError(error instanceof Error ? error.message : String(error))
   }

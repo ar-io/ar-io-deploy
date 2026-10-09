@@ -185,7 +185,7 @@ export default class Deploy extends Command {
         : undefined
 
       // Before the ArNS checks, which make the first network requests.
-      await refuseKeysInUpload(config, {
+      const scanned = await refuseKeysInUpload(config, {
         privateKeys: [uploadKey.privateKey, arnsKey.privateKey, deployKey, arnsAuthorityKey],
         walletPaths: [uploadKey.wallet, arnsKey.wallet],
       })
@@ -205,7 +205,7 @@ export default class Deploy extends Command {
       // Already searched above, so the workflow does not read every file twice.
       const result = await runUploadWorkflow(deployKey, config, {
         ...workflowIo,
-        keyScanner: false,
+        scanned,
       })
 
       // Printed before the ArNS update, so the id survives a failed update.

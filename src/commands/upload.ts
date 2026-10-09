@@ -79,7 +79,7 @@ export default class Upload extends Command {
         walletPath: key.wallet,
       })
 
-      await refuseKeysInUpload(config, {
+      const scanned = await refuseKeysInUpload(config, {
         privateKeys: [key.privateKey, deployKey],
         walletPaths: [key.wallet],
       })
@@ -88,7 +88,7 @@ export default class Upload extends Command {
       // Already searched above, so the workflow does not read every file twice.
       const result = await runUploadWorkflow(deployKey, config, {
         ...workflowIo,
-        keyScanner: false,
+        scanned,
       })
 
       this.log('')

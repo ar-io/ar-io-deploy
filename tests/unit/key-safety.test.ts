@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import Deploy from '../../src/commands/deploy.js'
 import Upload from '../../src/commands/upload.js'
 import { getAllFiles } from '../../src/utils/cache.js'
+import { refuseKeysInUpload } from '../../src/utils/command-helpers.js'
 import { isSameOrInside, keyFileInUpload } from '../../src/utils/key-safety.js'
 import { generateSolanaWallet } from '../../src/utils/keygen.js'
 import { planFileUpload, planFolderUpload } from '../../src/utils/uploader.js'
@@ -29,8 +30,10 @@ afterEach(() => {
 /** A generated id.json; never a real wallet. */
 const solanaIdJson = (): string => JSON.stringify(generateSolanaWallet().idJson)
 
-/** The shape of an Arweave JWK private key, with placeholder values. */
-const arweaveJwk = JSON.stringify({ d: 'x', e: 'AQAB', kty: 'RSA', n: 'y', p: 'z', q: 'w' })
+/** A generated Arweave-style JWK private key. */
+const arweaveJwk = JSON.stringify(
+  crypto.generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({ format: 'jwk' }),
+)
 
 function site(files: Record<string, string>): string {
   const folder = path.join(dir, 'site')
@@ -59,6 +62,21 @@ describe('planFolderUpload', () => {
     const folder = site({ 'data.json': '[1,2,3]', 'index.html': '<p>hi</p>' })
     const plan = await planFolderUpload(folder)
     expect(plan.files.map((file) => file.relativePath).sort()).toEqual(['data.json', 'index.html'])
+  })
+
+  it('uploads only what the command searched, never a file added after the search', async () => {
+    const folder = site({ 'index.html': '<p>hi</p>' })
+    const scanned = await refuseKeysInUpload(
+      { 'deploy-folder': folder },
+      { privateKeys: [], walletPaths: [] },
+    )
+    fs.writeFileSync(path.join(folder, 'late.json'), solanaIdJson())
+
+    const plan = await planFolderUpload(folder, {
+      listed: typeof scanned === 'object' ? scanned : undefined,
+    })
+
+    expect(plan.files.map((file) => file.relativePath)).toEqual(['index.html'])
   })
 
   it('leaves .git directories out and reports them, at any depth', async () => {
