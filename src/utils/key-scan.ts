@@ -1016,13 +1016,16 @@ function redactedName(name: string, scanner: KeyScanner): string {
 }
 
 /**
- * An environment file: `.env`, `.env.local`, `prod.env`, `.ENV`. Scripts and
- * pages named like one (`env.js`, `env.html`) are runtime configuration
- * that sites publish on purpose, so they are left to the content checks.
+ * An environment file: `.env`, `.env.local`, `.env.js`, `prod.env`, `.ENV`.
+ * Scripts and pages named like one without a leading dot (`env.js`,
+ * `env.html`) are runtime configuration that sites publish on purpose, so
+ * they are left to the content checks. A dotfile named `.env.*` never is.
  */
 function isEnvironmentFile(name: string): boolean {
   const base = path.basename(name)
-  return /(?:^|\.)env(?:\.|$)/i.test(base) && !/\.(?:c?js|mjs|ts|map|html?|css|json)$/i.test(base)
+  if (!/(?:^|\.)env(?:\.|$)/i.test(base)) return false
+  if (/^\.env/i.test(base)) return true
+  return !/\.(?:c?js|mjs|ts|map|html?|css|json)$/i.test(base)
 }
 
 const SCAN_CONCURRENCY = 8

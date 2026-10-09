@@ -627,3 +627,14 @@ describe('isSolanaKeypair', () => {
     expect(isSolanaKeypair(crypto.randomBytes(64))).toBe(false)
   })
 })
+
+describe('environment dotfiles', () => {
+  it.each(['.env.js', '.env.json', '.env.production.js', '.ENV.ts'])(
+    'refuses %s, even with a script extension',
+    async (name) => {
+      expect(await refusal({ [name]: 'window.env = { API_URL: "https://example.com" }' })).toMatch(
+        /is an environment file/,
+      )
+    },
+  )
+})
