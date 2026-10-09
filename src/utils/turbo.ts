@@ -218,7 +218,7 @@ export function fromBaseUnits(amount: bigint, token: TokenType): string {
 
 /** How an upload chooses who pays, mirroring Turbo's CLI options. */
 export interface PayerOptions {
-  /** Pay only from these addresses' credit-share approvals. */
+  /** Use only these addresses' credit-share approvals, then the key's own balance. */
   paidBy?: string[]
   /** Never use received approvals: the upload key's own balance pays. */
   ignoreApprovals?: boolean
@@ -273,8 +273,10 @@ function remainingWinc(approval: CreditShareApproval, now: number): bigint {
  * Credits this upload can actually spend.
  *
  * With every received approval in play that is Turbo's `effectiveBalance`.
- * Ignoring approvals leaves the key's own `winc`. Naming payers counts only
- * what those payers shared, since the bundler will charge nobody else.
+ * Ignoring approvals leaves the key's own `winc`. Naming payers counts what
+ * those payers shared plus the key's own balance: the bundler's default
+ * payment directive (`list-or-signer`) charges the signer for whatever the
+ * named approvals do not cover, and no other wallet.
  */
 export function spendableWinc(
   balance: Pick<TurboBalanceResponse, 'effectiveBalance' | 'receivedApprovals' | 'winc'>,
