@@ -119,14 +119,27 @@ export async function hashFile(filePath: string): Promise<string> {
  * Symlinks are followed only while they stay inside the folder. A link out of
  * it (to `~/.ssh`, say) would publish that file permanently and publicly, so
  * it is refused before anything is uploaded.
+ *
+ * `.git` directories are left out: a repository's history is not part of a
+ * site, and it can hold anything that was ever committed. Their paths are
+ * pushed onto `skipped` so the caller can say so.
  */
-export function getAllFiles(dirPath: string, basePath: string = dirPath): string[] {
+export function getAllFiles(
+  dirPath: string,
+  basePath: string = dirPath,
+  skipped: string[] = [],
+): string[] {
   const files: string[] = []
   const root = fs.realpathSync(basePath)
 
   for (const item of fs.readdirSync(dirPath)) {
     const fullPath = path.join(dirPath, item)
     const stats = fs.statSync(fullPath)
+
+    if (item === '.git' && stats.isDirectory()) {
+      skipped.push(path.relative(basePath, fullPath).split(path.sep).join('/'))
+      continue
+    }
 
     if (fs.lstatSync(fullPath).isSymbolicLink()) {
       const target = fs.realpathSync(fullPath)
@@ -138,7 +151,7 @@ export function getAllFiles(dirPath: string, basePath: string = dirPath): string
     }
 
     if (stats.isDirectory()) {
-      files.push(...getAllFiles(fullPath, basePath))
+      files.push(...getAllFiles(fullPath, basePath, skipped))
     } else {
       // Store relative path for consistent hashing
       files.push(path.relative(basePath, fullPath).split(path.sep).join('/'))

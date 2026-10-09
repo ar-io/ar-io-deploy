@@ -2,6 +2,7 @@ import bs58 from 'bs58'
 import { describe, expect, it } from 'vitest'
 
 import { deployKeyFromPrivateKey, deployKeyFromWalletFile } from '../../src/utils/deploy-key.js'
+import { generateSolanaWallet } from '../../src/utils/keygen.js'
 
 describe('deployKeyFromWalletFile', () => {
   it('base64-encodes an Arweave JWK file', () => {
@@ -10,7 +11,7 @@ describe('deployKeyFromWalletFile', () => {
   })
 
   it('converts a Solana id.json byte array to a base58 secret key', () => {
-    const bytes = Array.from({ length: 64 }, (_, i) => i)
+    const bytes = generateSolanaWallet().idJson
     const content = JSON.stringify(bytes)
     expect(deployKeyFromWalletFile('solana', content)).toBe(bs58.encode(Uint8Array.from(bytes)))
   })

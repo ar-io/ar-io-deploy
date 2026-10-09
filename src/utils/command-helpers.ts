@@ -7,12 +7,16 @@
  */
 
 import fs from 'node:fs'
+import path from 'node:path'
 
 import type { UploadWorkflowConfig, UploadWorkflowResult } from '../workflows/upload-workflow.js'
 import { chalk } from './chalk.js'
 import { deployKeyFromPrivateKey, deployKeyFromWalletFile } from './deploy-key.js'
 import { type DisplayRow, formatUploadError } from './display.js'
+import { keyFileInUpload } from './key-safety.js'
+import { assertNoPrivateKeys, createKeyScanner } from './key-scan.js'
 import { expandPath } from './path.js'
+import { type ListedFolder, listFolder } from './uploader.js'
 import { validateIncrementalDedupe } from './validators.js'
 
 /**
@@ -78,6 +82,83 @@ export function resolveKey(key: {
   }
 
   throw new Error(key.missing)
+}
+
+/**
+ * Refuse an upload that would publish a wallet file the command was given:
+ * one inside the deploy folder, or the `--deploy-file` itself. Runs before
+ * any key is read or any request is made.
+ *
+ * @throws A `WorkflowError` naming the wallet.
+ */
+export function refuseWalletInUpload(
+  config: Pick<UploadWorkflowConfig, 'deploy-file' | 'deploy-folder'>,
+  walletPaths: Array<string | undefined>,
+): void {
+  const problem = keyFileInUpload(
+    {
+      deployFile: config['deploy-file'] && expandPath(config['deploy-file']),
+      deployFolder: expandPath(config['deploy-folder']),
+    },
+    walletPaths.map((walletPath) => walletPath && expandPath(walletPath)),
+  )
+  if (problem) {
+    throw new WorkflowError(problem)
+  }
+}
+
+/** A wallet file's contents, or undefined when it is missing or not a plausible key file. */
+function readKeyFile(file: string): string | undefined {
+  try {
+    return fs.statSync(file).size <= 1024 * 1024 ? fs.readFileSync(file, 'utf8') : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Search everything about to be uploaded for every key this run holds, and
+ * for anything else shaped like a private key, before any network request.
+ *
+ * @param keys - Wallet file paths, and key strings from flags and resolved
+ *   keys. `DEPLOY_KEY` and `ARNS_KEY` are always included when set.
+ * @returns What was searched, for the workflow to upload exactly that.
+ * @throws A `WorkflowError` naming the file, never the key.
+ */
+export async function refuseKeysInUpload(
+  config: Pick<UploadWorkflowConfig, 'deploy-file' | 'deploy-folder'>,
+  keys: { privateKeys: Array<string | undefined>; walletPaths: Array<string | undefined> },
+): Promise<'deploy-file' | ListedFolder> {
+  const walletFiles = keys.walletPaths.flatMap((walletPath) =>
+    walletPath ? [expandPath(walletPath)] : [],
+  )
+  const scanner = createKeyScanner(
+    [
+      ...walletFiles.map((file) => readKeyFile(file)),
+      ...keys.privateKeys,
+      process.env.DEPLOY_KEY,
+      process.env.ARNS_KEY,
+    ],
+    walletFiles,
+  )
+
+  const deployFile = config['deploy-file']
+  const folder = expandPath(config['deploy-folder'])
+  try {
+    if (deployFile) {
+      await assertNoPrivateKeys([{ fullPath: expandPath(deployFile), name: deployFile }], scanner)
+      return 'deploy-file'
+    }
+
+    const listed = listFolder(folder)
+    await assertNoPrivateKeys(
+      listed.relativePaths.map((name) => ({ fullPath: path.join(folder, name), name })),
+      scanner,
+    )
+    return listed
+  } catch (error) {
+    throw new WorkflowError(error instanceof Error ? error.message : String(error))
+  }
 }
 
 export const MISSING_UPLOAD_KEY =

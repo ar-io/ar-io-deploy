@@ -20,11 +20,13 @@ import {
   createChainIndex,
   ownerAddressFromPublicKey,
 } from '../utils/incremental.js'
+import type { KeyScanner } from '../utils/key-scan.js'
 import { expandPath } from '../utils/path.js'
 import { createSigner } from '../utils/signer.js'
 import {
   devTokenRpc,
   FALLBACK_FREE_ITEM_BYTES,
+  fetchFreeBytesRemaining,
   fetchUploadServiceInfo,
   fromBaseUnits,
   fundShortfall,
@@ -47,6 +49,7 @@ import {
   type FileUploadPlan,
   type FolderUploadPlan,
   type IncrementalOptions,
+  type ListedFolder,
   planFileUpload,
   planFolderUpload,
   uploadFile,
@@ -92,6 +95,14 @@ export interface UploadWorkflowIo {
   tokenTools?: TokenTools
   /** How long to wait for a top-up to be credited; tests shorten it. */
   fundingPoll?: PollOptions
+  /** Every key the command holds, searched for in each file before planning. */
+  keyScanner?: KeyScanner
+  /**
+   * Set when the command has already searched the upload for keys: the
+   * folder's file list, or `'deploy-file'`. The plan then uploads exactly
+   * what was searched and does not read every file a second time.
+   */
+  scanned?: 'deploy-file' | ListedFolder
 }
 
 /**
@@ -473,6 +484,7 @@ export async function runUploadWorkflow(
       filePlan = await planFileUpload(expandPath(deployFile), {
         cache: useCache ? loadCache(scope) : undefined,
         compression,
+        keyScanner: io.scanned ? false : io.keyScanner,
       })
       spinner.succeed(
         filePlan.cached
@@ -498,6 +510,8 @@ export async function runUploadWorkflow(
         compression,
         fallbackFile: config['fallback-file'],
         incremental,
+        keyScanner: io.keyScanner,
+        listed: typeof io.scanned === 'object' ? io.scanned : undefined,
       })
 
       const { cacheHits, duplicates, files, recovered, uploadBytes } = folderPlan
@@ -508,6 +522,9 @@ export async function runUploadWorkflow(
           `${compression ? ` after ${compression.encoding}` : ''}), ${cacheHits} cached${recoveredMsg}, ` +
           `${duplicates} duplicates`,
       )
+      if (folderPlan.skipped.length > 0) {
+        spinner.info(`Not uploaded: ${folderPlan.skipped.join(', ')} (git repository data)`)
+      }
     }
   } catch (error) {
     spinner.fail('Failed to plan upload')
@@ -593,13 +610,22 @@ export async function runUploadWorkflow(
         )
       }
 
-      let bytesRemaining: bigint | null = null
+      /*
+       * Read directly rather than through Turbo SDK's getFreeStatus, which
+       * reports a 404 as unlimited. An allowance that cannot be read is
+       * priced as none: the check then asks for credits it might not need,
+       * rather than promising free uploads the service might refuse.
+       */
+      let bytesRemaining: bigint | null
       try {
-        const free = await turbo.getFreeStatus()
-        bytesRemaining = free.bytesRemaining === null ? null : BigInt(free.bytesRemaining)
+        bytesRemaining = await fetchFreeBytesRemaining(
+          services.paymentUrl,
+          await turbo.signer.getNativeAddress(),
+        )
       } catch (error) {
+        bytesRemaining = 0n
         warn(
-          `Could not read this wallet's free-tier allowance (${errorMessage(error)}); assuming it is available`,
+          `Could not confirm this wallet's free-tier allowance (${errorMessage(error)}); pricing every item as paid`,
         )
       }
 

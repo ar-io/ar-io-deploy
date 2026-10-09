@@ -28,6 +28,7 @@ import {
   incrementalCacheKey,
   isArweaveId,
 } from './incremental.js'
+import { assertNoPrivateKeys, type KeyScanner } from './key-scan.js'
 import type { UploadClient } from './upload-types.js'
 
 /**
@@ -208,6 +209,18 @@ export interface FileUploadPlan {
   uploadBytes: number
 }
 
+/** A folder's files, relative and `/`-separated, and the `.git` folders left out. */
+export interface ListedFolder {
+  relativePaths: string[]
+  skipped: string[]
+}
+
+/** List a folder once, for the key search and the plan to share. */
+export function listFolder(folderPath: string): ListedFolder {
+  const skipped: string[] = []
+  return { relativePaths: getAllFiles(folderPath, folderPath, skipped), skipped }
+}
+
 /**
  * Work out what uploading one file will send, without uploading: hash it,
  * check the cache, and compress it if it will be sent. Pricing this plan, not
@@ -215,8 +228,16 @@ export interface FileUploadPlan {
  */
 export async function planFileUpload(
   filePath: string,
-  options?: { cache?: TransactionCache; compression?: CompressionConfig },
+  options?: {
+    cache?: TransactionCache
+    compression?: CompressionConfig
+    keyScanner?: false | KeyScanner
+  },
 ): Promise<FileUploadPlan> {
+  if (options?.keyScanner !== false) {
+    await assertNoPrivateKeys([{ fullPath: filePath, name: filePath }], options?.keyScanner)
+  }
+
   const contentType = mime.lookup(filePath) || 'application/octet-stream'
   const encoding =
     options?.compression && shouldCompress(path.basename(filePath), options.compression)
@@ -359,6 +380,8 @@ export interface FolderUploadPlan {
   manifestBytes: number
   /** Of `cacheHits`, how many the chain index recovered. */
   recovered: number
+  /** Folders left out of the upload (`.git`), relative to the deploy folder. */
+  skipped: string[]
   /**
    * Total bytes that uploading this plan will send, excluding the manifest.
    * This is what the credit check prices, so a redeploy of two changed chunks
@@ -391,6 +414,13 @@ export async function planFolderUpload(
     concurrency?: number
     fallbackFile?: string
     incremental?: IncrementalOptions
+    /** The run's keys, searched for in every file; omitted, only the shape checks run. */
+    keyScanner?: KeyScanner
+    /**
+     * The files the caller already listed and searched for keys. The plan
+     * uploads exactly these, so a file added after the search is never sent.
+     */
+    listed?: ListedFolder
   },
 ): Promise<FolderUploadPlan> {
   const incremental = options?.incremental
@@ -398,8 +428,20 @@ export async function planFolderUpload(
   // Incremental mode always keeps a cache: it is where recovered ids go.
   const useCache = options?.cache !== undefined || incremental !== undefined
 
-  const relativePaths = getAllFiles(folderPath)
+  const listed = options?.listed ?? listFolder(folderPath)
+  const { relativePaths, skipped } = listed
   assertUploadableFolder(relativePaths, options?.fallbackFile)
+
+  // Before anything is hashed, looked up or sent: a key is never published.
+  if (!options?.listed) {
+    await assertNoPrivateKeys(
+      relativePaths.map((relativePath) => ({
+        fullPath: path.join(folderPath, relativePath),
+        name: relativePath,
+      })),
+      options?.keyScanner,
+    )
+  }
 
   /*
    * Hash every file when a cache is in play. In incremental mode the hash is
@@ -520,6 +562,7 @@ export async function planFolderUpload(
     files,
     manifestBytes: estimateManifestBytes(relativePaths),
     recovered,
+    skipped,
     uploadBytes: toUpload.reduce((sum, file) => sum + file.uploadBytes, 0),
   }
 }

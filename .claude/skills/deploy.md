@@ -25,7 +25,7 @@ They can be the same Solana wallet or two different wallets.
 ario-deploy keygen
 ```
 
-It writes `./ario-deploy-wallet.json` (a `solana-keygen` `id.json`, readable by the user only, never overwritten, added to `.gitignore` inside a git repository) and prints the file path, the public address, the free upload allowance and the exact `deploy` command to run next. It never prints the secret key. Use `--out <path>` to choose another file. Do not read the wallet file or print its contents.
+It writes `~/.ar.io/wallets/<address>.json` (a `solana-keygen` `id.json`, never overwritten) and prints the file path, the public address, the free upload allowance and the exact `deploy` command to run next. Use the path it prints. It never prints the secret key. On Linux and macOS only the user's account can read the file; on Windows the same is true unless `keygen` prints a warning that it could not set the permissions. Use `--out <path>` to choose another file, never inside the folder being deployed: `deploy` and `upload` refuse to publish a file that contains any key they were given (including `DEPLOY_KEY` and `ARNS_KEY`), a `.env` file, or a file that can be proved to be a private key. The check stops a key from being published by accident; it cannot find a key that someone disguises on purpose, so keep keys outside the project. Do not read the wallet file or print its contents.
 
 Tell the user to back up the wallet file: anyone who has it controls the wallet, and it cannot be recovered.
 
@@ -35,7 +35,7 @@ Tell the user to back up the wallet file: anyone who has it controls the wallet,
 
 ### 2. Get an ArNS Name (for human-readable URLs)
 
-ArNS names give you a permanent URL like `https://myapp.ar.io`.
+ArNS names give you a human-readable URL like `https://myapp.ar.io`.
 
 - **Purchase a name**: Go to https://arns.ar.io and search for an available name
 - Names are purchased with ARIO tokens on Solana
@@ -47,6 +47,7 @@ ArNS names give you a permanent URL like `https://myapp.ar.io`.
 **Free tier facts** (tell the user before the first deploy):
 
 - Turbo uploads are free up to **105 KiB per file**, and up to **10 MiB over the lifetime of a wallet and 10 MiB over the lifetime of an IP range**. Both are metered.
+- These are today's numbers. Check the live ones before relying on them: `curl https://upload.ardrive.io/v1/info` (`freeUploadLimitBytes` and `freeTier`), and what a wallet has left: `curl 'https://payment.ardrive.io/v1/account/free?address=<address>'` (`bytesRemaining`; `keygen` prints it for a new wallet). Nothing reports what an IP range has left.
 - The pre-upload check only knows the wallet. It can say "within this wallet's free tier" and the upload can still fail with HTTP 402 because the IP range's allowance is used up.
 - On a 402, **stop and report it**. Never fall back to `--dev` to get past it: `--dev` uploads to the Turbo sandbox, which is not permanent and is not served by production gateways, so the URL it prints is not a real deployment. Offer these instead: add Turbo credits, `--on-demand` with `--max-token-amount`, or credits shared to the wallet.
 
@@ -79,7 +80,7 @@ Before deploying, verify:
    ```
 3. **Wallet/key is available** — Check for:
    - `DEPLOY_KEY` environment variable (and `ARNS_KEY` if updating ArNS)
-   - Wallet files (e.g., `wallet.json`, `id.json`, `~/.config/solana/id.json`)
+   - Wallet files (e.g., `~/.ar.io/wallets/*.json`, `~/.config/solana/id.json`), never one inside the folder being deployed
    - If neither is found, run `ario-deploy keygen` to create a wallet; do not ask the user to generate one elsewhere
 4. **ArNS name exists** (if deploying with ArNS) — The user must have already purchased a name at https://arns.ar.io
 
@@ -146,7 +147,7 @@ A link shared on X, Discord or Slack shows a preview card when the page has Open
 2. Upload it on its own and note the id it prints:
 
    ```bash
-   npx @ar.io/deploy upload --sig-type solana --wallet ./ario-deploy-wallet.json --deploy-file ./og.png
+   npx @ar.io/deploy upload --sig-type solana --wallet ~/.ar.io/wallets/<address>.json --deploy-file ./og.png
    ```
 
 3. Add these to each page's `<head>`, then deploy the site as usual:

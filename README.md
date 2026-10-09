@@ -12,11 +12,11 @@ Deploy your app to Arweave in under a minute:
 # Install
 npm install -g @ar.io/deploy
 
-# Create a Solana wallet file (prints its address and the next command)
+# Create a Solana wallet file (prints its path, its address and the next command)
 ario-deploy keygen
 
 # Deploy a folder with that wallet; the first files are free (see Free tier)
-ario-deploy deploy --sig-type solana --wallet ./ario-deploy-wallet.json --deploy-folder ./dist
+ario-deploy deploy --sig-type solana --wallet ~/.ar.io/wallets/<address>.json --deploy-folder ./dist
 
 # Or deploy interactively (prompts for everything)
 ario-deploy deploy
@@ -25,7 +25,9 @@ ario-deploy deploy
 DEPLOY_KEY=<solana-base58-key> ario-deploy deploy --deploy-folder ./dist --arns-name myapp --sig-type solana
 ```
 
-Your app is now permanently live at `https://myapp.ar.io`.
+The deploy prints the manifest id, and your site is at `https://turbo-gateway.com/<manifest id>`.
+
+With `--arns-name myapp`, it is also at `https://myapp.ar.io`. For that, the wallet must own the name or be a controller of it. Get a name at https://arns.ar.io.
 
 ## Table of Contents
 
@@ -120,13 +122,20 @@ They can be the same Solana wallet or two different wallets — provide each exp
 #### Create a wallet with `keygen`
 
 ```bash
-ario-deploy keygen                      # writes ./ario-deploy-wallet.json
-ario-deploy keygen --out ./my-wallet.json
+ario-deploy keygen                      # writes ~/.ar.io/wallets/<address>.json
+ario-deploy keygen --out ~/wallets/my-wallet.json
 ```
 
-`keygen` writes a new Solana key in `solana-keygen` `id.json` format, readable by you only. It refuses to overwrite an existing file, and when the file is inside a git repository it adds the file to the repository's `.gitignore`. It prints the file path, the public address, the wallet's free upload allowance and the exact `deploy` command to run next. It never prints the secret key. Add `--dev` to look up the allowance on the Turbo sandbox.
+`keygen` writes a new Solana key in `solana-keygen` `id.json` format. By default the file goes in `~/.ar.io/wallets/`, a folder in your home directory outside any project, named after the wallet's address. It prints the file path, the public address, the wallet's free upload allowance and the exact `deploy` command to run next. It never prints the secret key, and it never overwrites an existing file. Add `--dev` to look up the allowance on the Turbo sandbox.
 
-Back up the wallet file. Anyone who has it controls the wallet, and nobody can recover it for you.
+Who can read the file:
+
+- **Linux and macOS:** the file has mode `0600` and the wallets folder `0700`, so only your account can read them.
+- **Windows:** `keygen` removes inherited permissions with `icacls` and grants access to your account only. When that fails it prints a warning, and other accounts on the computer might be able to read the file.
+
+**Never put the wallet inside the folder you deploy.** An upload is permanent and public, and anyone who reads the file controls the wallet. `deploy` and `upload` refuse to publish any key they were given, including `DEPLOY_KEY` and `ARNS_KEY`, and any file that can be proved to be a private key (see [Files that are never uploaded](#files-that-are-never-uploaded)). `--out` accepts any path, but `keygen` warns when the path is inside the current folder. When the file is inside a git repository, `keygen` adds it to the repository's `.gitignore` and then asks git to confirm that it is ignored and not tracked. If git does not confirm both, it prints a warning instead.
+
+Back up the wallet file. It is the only copy, anyone who has it controls the wallet, and nobody can recover it for you. Never paste its contents anywhere.
 
 ### ArNS authority key (`ARNS_KEY`)
 
@@ -408,6 +417,31 @@ By default, ario-deploy caches your deployment log to prevent uploading duplicat
 Entries are keyed on the file's content and content type (plus encoding when compressed), so byte-identical files served as different types are never confused. Caches written by 1.x, keyed on the hash alone, are still honoured, except for empty files, whose hash says nothing about their type.
 
 Symlinks inside the deploy folder are followed only while they point inside it; a link to a file outside the folder stops the deploy, since uploading it would publish that file permanently.
+
+#### Files that are never uploaded
+
+The check is built to stop a key from being published by accident. It cannot promise to find a key that someone disguises on purpose (reversed, split across files, or in an encoding of their own), so keep keys outside the project folder.
+
+Before any request is made, `deploy` and `upload` list the files once, read every one of them and refuse to publish a private key. Only the files that were checked are uploaded. The error names the file and never prints the key. There is no flag to override this.
+
+**Keys the run holds.** Every key the command was given (`--wallet`, `--arns-wallet`, `--private-key`, `--arns-private-key`, `DEPLOY_KEY` and `ARNS_KEY`, whichever are set) is searched for in every file and every file name. The search covers:
+
+- the key's raw bytes, hex in any case (also as `0x0c, 0x22`, `\x0c\x22` or `0c:22`), a decimal byte list such as `[12, 34, ...]`, base58, and base64 or base64url at any alignment
+- an Arweave key's private JWK fields, the base64 JWK that `DEPLOY_KEY` holds, and each key file base64-encoded, as in a `data:` URI
+- text with spaces, line breaks, string concatenation, `\u`, `\x` and percent escapes removed, UTF-16 text, every string of a JSON file, and printable text inside binary files
+
+Gzip, brotli (`.br`), zip and tar files are opened and searched, including archives inside archives up to three levels deep. A compressed file is refused as one that could not be checked when it expands to more than 1 GiB, is nested deeper, is damaged or encrypted, or is a 7z, RAR, xz, bzip2, Zstandard or cabinet archive. The run also stops when a wallet file, or a hard link or symlink to one, is inside the deploy folder or is the `--deploy-file`.
+
+**Keys the run does not hold.** The run also stops on what can be proved to be a private key, in files and inside the archives above:
+
+- an environment file: `.env`, `.env.local`, `.env.example`, `prod.env`, in any case (scripts and pages such as `env.js` are not refused for their name)
+- a PEM private key block (`-----BEGIN PRIVATE KEY-----` and the RSA, EC, DSA, OPENSSH and ENCRYPTED forms); public keys and certificates are not refused
+- a Solana keypair written as a byte array, base58 or hex, checked by deriving its public half from its seed
+- an object with a private exponent `d` and an RSA-sized modulus `n` (2048 bits or more) together, as JSON, inside a string or base64-encoded
+
+What is not detected for a key the run does not hold: a 32-byte seed or an Ethereum key on its own in any form (it cannot be told from a hash), brotli data without a `.br` name, and keys inside compressed parts of other formats, such as PNG text chunks or PDF streams.
+
+`.git` folders are left out of folder uploads, with a one-line note.
 
 The Turbo credit check runs after this planning step, so it prices only what will actually be uploaded, not the whole folder.
 
@@ -863,6 +897,7 @@ ar-io-deploy/
 - **Turbo Credits:** Ensure your wallet has sufficient Turbo Credits, or use on-demand payment for automatic funding
 - **On-Demand Limits:** Set reasonable `--max-token-amount` limits to prevent unexpected costs
 - **Secret Management:** Keep your `DEPLOY_KEY` secret secure and never commit it to your repository
+- **Wallet Location:** Never keep a wallet file inside the folder you deploy. `ario-deploy` refuses to upload one it recognizes (see [Files that are never uploaded](#files-that-are-never-uploaded)), but other tools that publish the folder do not
 - **Build Security:** Always check your build for exposed environmental secrets before deployment, as data on Arweave is permanent
 
 ## Troubleshooting

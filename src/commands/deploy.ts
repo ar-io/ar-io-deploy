@@ -10,6 +10,8 @@ import {
   canPrompt,
   isPromptCancel,
   MISSING_UPLOAD_KEY,
+  refuseKeysInUpload,
+  refuseWalletInUpload,
   reportFailure,
   resolveKey,
   uploadResultRows,
@@ -160,6 +162,9 @@ export default class Deploy extends Command {
         this.log('')
       }
 
+      // A wallet is never published, whatever else the flags say.
+      refuseWalletInUpload(config, [uploadKey.wallet, arnsKey.wallet])
+
       // Every key is read and validated before anything is paid for.
       const deployKey = resolveKey({
         envVar: 'DEPLOY_KEY',
@@ -179,6 +184,12 @@ export default class Deploy extends Command {
           })
         : undefined
 
+      // Before the ArNS checks, which make the first network requests.
+      const scanned = await refuseKeysInUpload(config, {
+        privateKeys: [uploadKey.privateKey, arnsKey.privateKey, deployKey, arnsAuthorityKey],
+        walletPaths: [uploadKey.wallet, arnsKey.wallet],
+      })
+
       this.log(chalk.bold(chalk.cyan('\nStarting deployment...\n')))
 
       if (useArns && deployConfig.cluster === 'mainnet' && usesTurboSandbox(config)) {
@@ -191,7 +202,11 @@ export default class Deploy extends Command {
         ? await this.prepareArns(deployConfig, arnsAuthorityKey)
         : undefined
 
-      const result = await runUploadWorkflow(deployKey, config, workflowIo)
+      // Already searched above, so the workflow does not read every file twice.
+      const result = await runUploadWorkflow(deployKey, config, {
+        ...workflowIo,
+        scanned,
+      })
 
       // Printed before the ArNS update, so the id survives a failed update.
       this.log('')

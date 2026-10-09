@@ -8,6 +8,8 @@ import {
 } from '@solana/kit'
 import bs58 from 'bs58'
 
+import { ed25519PublicKeyFromSeed } from './key-scan.js'
+
 type ClusterProgramIds = Partial<
   Record<'antProgramId' | 'arnsProgramId' | 'coreProgramId' | 'garProgramId', Address>
 >
@@ -51,6 +53,9 @@ export function solanaDeployKeyFromString(input: string): string {
  * Convert a `solana-keygen` JSON wallet (a JSON array of 64 bytes, e.g.
  * ~/.config/solana/id.json) into the base58 secret-key string used as the
  * deploy key throughout the CLI.
+ *
+ * The last 32 bytes must be the public key of the first 32. A file where they
+ * differ signs as one address while claiming another, so it is refused.
  */
 export function solanaDeployKeyFromFile(content: string): string {
   let bytes: number[]
@@ -66,7 +71,18 @@ export function solanaDeployKeyFromFile(content: string): string {
     )
   }
 
-  return bs58.encode(Uint8Array.from(bytes))
+  if (!bytes.every((byte) => Number.isInteger(byte) && byte >= 0 && byte <= 255)) {
+    throw new Error('Invalid Solana wallet file: every entry must be a whole number from 0 to 255')
+  }
+
+  const secret = Uint8Array.from(bytes)
+  if (!ed25519PublicKeyFromSeed(secret.subarray(0, 32)).equals(secret.subarray(32))) {
+    throw new Error(
+      'Invalid Solana wallet file: the last 32 bytes are not the public key of the first 32. The file is damaged or was not made by solana-keygen.',
+    )
+  }
+
+  return bs58.encode(secret)
 }
 
 /**
