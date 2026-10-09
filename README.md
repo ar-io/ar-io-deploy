@@ -131,7 +131,7 @@ Who can read the file:
 - **Linux and macOS:** the file has mode `0600` and the wallets folder `0700`, so only your account can read them.
 - **Windows:** `keygen` removes inherited permissions with `icacls` and grants access to your account only. When that fails it prints a warning, and other accounts on the computer might be able to read the file.
 
-**Never put the wallet inside the folder you deploy.** An upload is permanent and public, and anyone who reads the file controls the wallet. `deploy` and `upload` refuse to publish any key they were given, including `DEPLOY_KEY` and `ARNS_KEY`, and any file shaped like a private key (see [Files that are never uploaded](#files-that-are-never-uploaded)). `--out` accepts any path, but `keygen` warns when the path is inside the current folder. When the file is inside a git repository, `keygen` adds it to the repository's `.gitignore` and then asks git to confirm that it is ignored and not tracked. If git does not confirm both, it prints a warning instead.
+**Never put the wallet inside the folder you deploy.** An upload is permanent and public, and anyone who reads the file controls the wallet. `deploy` and `upload` refuse to publish any key they were given, including `DEPLOY_KEY` and `ARNS_KEY`, and any file that can be proved to be a private key (see [Files that are never uploaded](#files-that-are-never-uploaded)). `--out` accepts any path, but `keygen` warns when the path is inside the current folder. When the file is inside a git repository, `keygen` adds it to the repository's `.gitignore` and then asks git to confirm that it is ignored and not tracked. If git does not confirm both, it prints a warning instead.
 
 Back up the wallet file. It is the only copy, anyone who has it controls the wallet, and nobody can recover it for you. Never paste its contents anywhere.
 
@@ -418,21 +418,17 @@ Symlinks inside the deploy folder are followed only while they point inside it; 
 
 #### Files that are never uploaded
 
-Before any request is made, `deploy` and `upload` read every file they would upload and refuse to publish a private key. The error names the file and never prints the key. There is no flag to override this.
+Before any request is made, `deploy` and `upload` list the files once, read every one of them and refuse to publish a private key. Only the files that were checked are uploaded. The error names the file and never prints the key. There is no flag to override this.
 
-**Keys the run holds.** Every key the command was given (`--wallet`, `--arns-wallet`, `--private-key`, `--arns-private-key`, `DEPLOY_KEY` and `ARNS_KEY`, whichever are set) is searched for in every file, at any size and also as UTF-16 text. The search covers the key's raw bytes, hex, base64, base64url and base58 forms, an Arweave key's private JWK fields and the base64 JWK that `DEPLOY_KEY` holds. The run also stops when a wallet file, or a hard link or symlink to one, is inside the deploy folder or is the `--deploy-file`.
+**Keys the run holds.** Every key the command was given (`--wallet`, `--arns-wallet`, `--private-key`, `--arns-private-key`, `DEPLOY_KEY` and `ARNS_KEY`, whichever are set) is searched for in every file and every file name. The search covers the key's raw bytes, hex in any case, base64 and base64url (also percent-encoded or with `\/`), base58, a decimal byte list such as `[12, 34, ...]`, an Arweave key's private JWK fields and the base64 JWK that `DEPLOY_KEY` holds. Files are searched at any size, as UTF-16 too, with spaces and line breaks removed, and gzip, brotli (`.br`) and zip files are searched after they are decompressed. A compressed file that expands to more than 1 GiB, is damaged, is encrypted or uses a format the check cannot read is refused, because it could not be checked. The run also stops when a wallet file, or a hard link or symlink to one, is inside the deploy folder or is the `--deploy-file`.
 
-**Keys the run does not hold.** The run also stops on files shaped like a private key:
+**Keys the run does not hold.** The run also stops on what can be proved to be a private key:
 
 - any file whose name starts with `.env`
-- a Solana keypair written as a byte array, base58 or hex, anywhere in a text file (checked by deriving its public half)
-- a 32- or 64-entry byte array at any depth of a JSON file
-- a JWK with a private exponent (`d` with `n` or `crv`), also inside a string or base64-encoded
-- a 64- or 128-character hex value or an 86 to 88-character base58 value written after a label such as `KEY=`, `secret:` or `private_key`
+- a Solana keypair written as a byte array, base58 or hex, anywhere in a text file or file name, checked by deriving its public half from its seed
+- an object with a private exponent `d` and a modulus `n`, as JSON, inside a string or base64-encoded
 
-A bare 64-character hex value with no label, such as a SHA-256 hash, is not refused.
-
-What is not detected for a key the run does not hold: PEM files, a 32-byte seed in base58 or hex with no label, keys inside binary or compressed files, and keys split across lines or strings. Check your build for those yourself.
+What is not detected for a key the run does not hold: PEM files, a 32-byte seed or an Ethereum key on its own in any form (it cannot be told from a hash), keys inside binary files, and keys split across strings. Check your build for those yourself.
 
 `.git` folders are left out of folder uploads, with a one-line note.
 
