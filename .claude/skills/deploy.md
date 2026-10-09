@@ -47,6 +47,7 @@ ArNS names give you a permanent URL like `https://myapp.ar.io`.
 **Free tier facts** (tell the user before the first deploy):
 
 - Turbo uploads are free up to **105 KiB per file**, and up to **10 MiB over the lifetime of a wallet and 10 MiB over the lifetime of an IP range**. Both are metered.
+- These are today's numbers. Check the live ones before relying on them: `curl https://upload.ardrive.io/v1/info` (`freeUploadLimitBytes` and `freeTier`), and what a wallet has left: `curl 'https://payment.ardrive.io/v1/account/free?address=<address>'` (`bytesRemaining`; `keygen` prints it for a new wallet). Nothing reports what an IP range has left.
 - The pre-upload check only knows the wallet. It can say "within this wallet's free tier" and the upload can still fail with HTTP 402 because the IP range's allowance is used up.
 - On a 402, **stop and report it**. Never fall back to `--dev` to get past it: `--dev` uploads to the Turbo sandbox, which is not permanent and is not served by production gateways, so the URL it prints is not a real deployment. Offer these instead: add Turbo credits, `--on-demand` with `--max-token-amount`, or credits shared to the wallet.
 
