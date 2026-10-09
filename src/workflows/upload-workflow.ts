@@ -26,6 +26,7 @@ import { createSigner } from '../utils/signer.js'
 import {
   devTokenRpc,
   FALLBACK_FREE_ITEM_BYTES,
+  fetchFreeBytesRemaining,
   fetchUploadServiceInfo,
   fromBaseUnits,
   fundShortfall,
@@ -601,13 +602,22 @@ export async function runUploadWorkflow(
         )
       }
 
-      let bytesRemaining: bigint | null = null
+      /*
+       * Read directly rather than through Turbo SDK's getFreeStatus, which
+       * reports a 404 as unlimited. An allowance that cannot be read is
+       * priced as none: the check then asks for credits it might not need,
+       * rather than promising free uploads the service might refuse.
+       */
+      let bytesRemaining: bigint | null
       try {
-        const free = await turbo.getFreeStatus()
-        bytesRemaining = free.bytesRemaining === null ? null : BigInt(free.bytesRemaining)
+        bytesRemaining = await fetchFreeBytesRemaining(
+          services.paymentUrl,
+          await turbo.signer.getNativeAddress(),
+        )
       } catch (error) {
+        bytesRemaining = 0n
         warn(
-          `Could not read this wallet's free-tier allowance (${errorMessage(error)}); assuming it is available`,
+          `Could not confirm this wallet's free-tier allowance (${errorMessage(error)}); pricing every item as paid`,
         )
       }
 

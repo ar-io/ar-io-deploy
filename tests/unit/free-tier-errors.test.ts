@@ -131,6 +131,11 @@ describe('upload workflow messages', () => {
   })
 
   it('marks a sandbox result, and only a sandbox result', async () => {
+    server.use(
+      http.get('https://payment.services.ar-io.dev/v1/account/free', () =>
+        HttpResponse.json({ bytesRemaining: 10 * 1024 * 1024 }),
+      ),
+    )
     upload(SANDBOX_UPLOAD, () => HttpResponse.json({ id: 'b'.repeat(43), owner: 'o' }))
     const sandbox = await runUploadWorkflow(ARWEAVE_KEY, config({ dev: true }), io)
     expect(sandbox.development).toBe(true)

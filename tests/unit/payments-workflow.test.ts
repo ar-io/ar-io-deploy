@@ -518,6 +518,22 @@ describe("the wallet's metered free tier", () => {
     expect(prod.priceRequests).toEqual([])
     expect(prod.paidBy).toEqual(['alice', 'alice'])
   })
+
+  it.each([
+    ['a 404', () => HttpResponse.json({}, { status: 404 })],
+    ['a failed request', () => HttpResponse.error()],
+  ])(
+    'prices every item when the allowance lookup returns %s, never calling it free',
+    async (_, reply) => {
+      const prod = turboAt(PROD)
+      server.use(http.get(`${PROD.payment}/v1/account/free`, reply))
+
+      await runUploadWorkflow(ARWEAVE_KEY, config(), io)
+
+      // index.html and the manifest are within the free size, but the tier is unknown.
+      expect(prod.priceRequests.length).toBeGreaterThan(0)
+    },
+  )
 })
 
 describe('partial failure', () => {

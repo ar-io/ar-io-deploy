@@ -307,8 +307,8 @@ export const FALLBACK_FREE_ITEM_BYTES = 107_520
  *
  * Turbo uploads an item for free when it is within `maxItemBytes` and the
  * wallet still has free-tier bytes left: the tier is metered per wallet (and
- * per network). `bytesRemaining` is null when the wallet is unlimited or the
- * figure is unavailable.
+ * per network). `bytesRemaining` is null only when the payment service says
+ * the wallet is unlimited; an unknown allowance is passed as 0.
  */
 export interface FreeAllowance {
   bytesRemaining: bigint | null
