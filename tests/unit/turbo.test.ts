@@ -183,6 +183,19 @@ describe('spendableWinc', () => {
     expect(spendableWinc(balance, { paidBy: ['alice'] })).toBe(110n)
     expect(spendableWinc(balance, { paidBy: ['carol'] })).toBe(50n)
   })
+
+  it('counts the upload key with only shared credits, as in issue #17', () => {
+    // The key owns nothing; a credit share is all it can spend. 1.x compared
+    // the price against `winc` and refused the upload with "available: 0".
+    const sharedOnly = {
+      effectiveBalance: '1000000000000',
+      receivedApprovals: [approval('alice', '1000000000000')],
+      winc: '0',
+    }
+    expect(spendableWinc(sharedOnly, {})).toBe(1_000_000_000_000n)
+    expect(spendableWinc(sharedOnly, { paidBy: ['alice'] })).toBe(1_000_000_000_000n)
+    expect(spendableWinc(sharedOnly, { ignoreApprovals: true })).toBe(0n)
+  })
 })
 
 /** Production's free item limit, with free-tier bytes to spare. */
