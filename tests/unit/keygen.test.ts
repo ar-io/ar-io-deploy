@@ -310,7 +310,7 @@ async function keygen(
   return { error, stdout: lines.join('\n'), warnings: warned.join('\n') }
 }
 
-function allowance(body: unknown, status = 200): void {
+function allowance(body: Parameters<typeof HttpResponse.json>[0], status = 200): void {
   server.use(
     http.get('https://payment.ardrive.io/v1/account/free', () =>
       HttpResponse.json(body, { status }),
@@ -393,7 +393,7 @@ describe('keygen command', () => {
     const { error, stdout, warnings } = await keygen([])
 
     expect(error).toBeUndefined()
-    const folder = path.join(home, '.ario-deploy', 'wallets')
+    const folder = path.join(home, '.ar.io', 'wallets')
     const [name] = fs.readdirSync(folder)
     const file = path.join(folder, name)
     const bytes = walletBytes(file)
@@ -431,6 +431,28 @@ describe('keygen command', () => {
 
     const outside = await keygen(['--out', path.join(home, 'w.json')])
     expect(outside.warnings).not.toMatch(/must never be inside/)
+  })
+
+  it('warns for the default path too, when the home folder is the current folder', async () => {
+    allowance({ bytesRemaining: 0 })
+    vi.spyOn(process, 'cwd').mockReturnValue(home)
+
+    const { warnings } = await keygen([])
+
+    expect(warnings).toMatch(/must never be inside a folder you deploy/)
+  })
+
+  it('keeps the default wallet folder off the name the GitHub Action caches', async () => {
+    allowance({ bytesRemaining: 0 })
+    const { stdout } = await keygen([])
+    const action = fs.readFileSync(new URL('../../action.yml', import.meta.url), 'utf8')
+    const cached = [...action.matchAll(/^\s*path:\s*(\S+)/gm)].map(([, cached]) => cached)
+
+    expect(cached.length).toBeGreaterThan(0)
+    for (const cachedPath of cached) {
+      const top = cachedPath.split('/')[0]
+      expect(stdout).not.toContain(`${path.sep}${top}${path.sep}`)
+    }
   })
 
   it('refuses to overwrite a wallet', async () => {

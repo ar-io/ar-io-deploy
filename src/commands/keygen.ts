@@ -38,7 +38,7 @@ export default class Keygen extends Command {
     }),
     out: Flags.string({
       description:
-        'Where to write the wallet file. Defaults to ~/.ario-deploy/wallets/<address>.json. Never inside a folder you deploy. An existing file is never overwritten.',
+        'Where to write the wallet file. Defaults to ~/.ar.io/wallets/<address>.json. Never inside a folder you deploy. An existing file is never overwritten.',
     }),
   }
 
@@ -74,7 +74,8 @@ export default class Keygen extends Command {
         )
       }
 
-      if (flags.out !== undefined && isSameOrInside(realOrResolved(file), realOrResolved('.'))) {
+      // Also for the default path: the home folder can be the project folder.
+      if (isSameOrInside(realOrResolved(file), realOrResolved('.'))) {
         warnings.push(
           'The wallet is inside the current folder. It must never be inside a folder you deploy: ario-deploy refuses to upload it, and anything else that publishes the folder would leak it.',
         )

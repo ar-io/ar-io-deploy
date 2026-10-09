@@ -44,7 +44,7 @@ export function generateSolanaWallet(): GeneratedWallet {
  * project, so no `deploy --deploy-folder .` can reach it.
  */
 export function defaultWalletFolder(home: string = os.homedir()): string {
-  return path.join(home, '.ario-deploy', 'wallets')
+  return path.join(home, '.ar.io', 'wallets')
 }
 
 /**
