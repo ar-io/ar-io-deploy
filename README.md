@@ -25,7 +25,9 @@ ario-deploy deploy
 DEPLOY_KEY=<solana-base58-key> ario-deploy deploy --deploy-folder ./dist --arns-name myapp --sig-type solana
 ```
 
-Your app is now permanently live at `https://myapp.ar.io`.
+The deploy prints the manifest id, and your site is at `https://turbo-gateway.com/<manifest id>`.
+
+With `--arns-name myapp`, it is also at `https://myapp.ar.io`. For that, the wallet must own the name or be a controller of it. Get a name at https://arns.ar.io.
 
 ## Table of Contents
 

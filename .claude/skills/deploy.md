@@ -35,7 +35,7 @@ Tell the user to back up the wallet file: anyone who has it controls the wallet,
 
 ### 2. Get an ArNS Name (for human-readable URLs)
 
-ArNS names give you a permanent URL like `https://myapp.ar.io`.
+ArNS names give you a human-readable URL like `https://myapp.ar.io`.
 
 - **Purchase a name**: Go to https://arns.ar.io and search for an available name
 - Names are purchased with ARIO tokens on Solana

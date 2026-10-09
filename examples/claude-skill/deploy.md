@@ -34,7 +34,7 @@ It writes `~/.ar.io/wallets/<address>.json` (a `solana-keygen` `id.json`, never 
 ### Get an ArNS Name (optional, for human-readable URLs)
 
 - Purchase a name at https://arns.ar.io (costs ARIO tokens)
-- This gives you a permanent URL like `https://myapp.ar.io`
+- This gives you a human-readable URL like `https://myapp.ar.io`
 - Skip if you only need a raw Arweave transaction URL
 
 ### Fund Uploads
