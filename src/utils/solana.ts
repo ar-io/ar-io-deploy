@@ -109,6 +109,18 @@ export function createArioRpc(cluster: SolanaCluster, rpcUrl?: string) {
   return createSolanaRpc(clusterHttpUrl(cluster, rpcUrl))
 }
 
+/**
+ * A wallet's SOL balance in lamports. The ArNS key pays the fee for the
+ * record update, so a key holding none cannot make it.
+ */
+export async function getLamports(
+  rpc: ReturnType<typeof createArioRpc>,
+  address: string,
+): Promise<bigint> {
+  const { value } = await rpc.getBalance(address as Address).send()
+  return value
+}
+
 export function createArioRpcSubscriptions(cluster: SolanaCluster, rpcUrl?: string) {
   return createSolanaRpcSubscriptions(toWebSocketUrl(clusterHttpUrl(cluster, rpcUrl)))
 }

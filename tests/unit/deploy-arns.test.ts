@@ -22,6 +22,13 @@ const sdk = vi.hoisted(() => ({
   setBaseNameRecord: vi.fn(),
 }))
 
+const balance = vi.hoisted(() => ({ getLamports: vi.fn() }))
+
+vi.mock('../../src/utils/solana.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../src/utils/solana.js')>()),
+  getLamports: balance.getLamports,
+}))
+
 vi.mock('@ar.io/sdk', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@ar.io/sdk')>()),
   ARIO: { init: () => ({ getArNSRecord: sdk.getArNSRecord }) },
@@ -54,6 +61,7 @@ beforeEach(() => {
   sdk.getArNSRecord.mockResolvedValue({ processId: PROCESS_ID })
   sdk.getControllers.mockResolvedValue([])
   sdk.setBaseNameRecord.mockResolvedValue({ id: 'ok' })
+  balance.getLamports.mockResolvedValue(5_000_000n)
   server.use(
     http.post('https://upload.ardrive.io/v1/tx/:token', () => {
       uploads += 1
@@ -159,6 +167,32 @@ describe('who controls the name', () => {
     sdk.getOwner.mockRejectedValue(new Error('429 Too Many Requests'))
 
     const { error } = await deploy(solanaKey().secret)
+
+    expect(error).toBeUndefined()
+    expect(sdk.setBaseNameRecord).toHaveBeenCalled()
+  })
+})
+
+describe('the fee for the record update', () => {
+  it('refuses a key that holds no SOL, before uploading', async () => {
+    const key = solanaKey()
+    sdk.getOwner.mockResolvedValue(key.address)
+    balance.getLamports.mockResolvedValue(0n)
+
+    const { error } = await deploy(key.secret)
+
+    expect(error?.message).toContain(`The ArNS key ${key.address} holds no SOL`)
+    expect(error?.message).toContain('Nothing was uploaded')
+    expect(uploads).toBe(0)
+    expect(sdk.setBaseNameRecord).not.toHaveBeenCalled()
+  })
+
+  it('does not refuse when the balance cannot be read, leaving the update as the check', async () => {
+    const key = solanaKey()
+    sdk.getOwner.mockResolvedValue(key.address)
+    balance.getLamports.mockRejectedValue(new Error('429 Too Many Requests'))
+
+    const { error } = await deploy(key.secret)
 
     expect(error).toBeUndefined()
     expect(sdk.setBaseNameRecord).toHaveBeenCalled()

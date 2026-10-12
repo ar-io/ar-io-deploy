@@ -25,6 +25,7 @@ import {
   createArioRpc,
   createArioRpcSubscriptions,
   createSolanaArnsSigner,
+  getLamports,
   type SolanaCluster,
 } from '../utils/solana.js'
 import { resolveTurboServices } from '../utils/turbo.js'
@@ -230,8 +231,8 @@ export default class Deploy extends Command {
 
   /**
    * Everything about the ArNS update that can be checked before the upload is
-   * paid for: the name exists, the key decodes, and the key appears to control
-   * the name. Returns the update to run once the upload has an id.
+   * paid for: the name exists, the key decodes, the key appears to control
+   * the name, and it holds some SOL for the fee. Returns the update to run once the upload has an id.
    */
   private async prepareArns(
     config: DeployConfig,
@@ -309,6 +310,29 @@ export default class Deploy extends Command {
       }
 
       spinner.warn(`${problem}; continuing because of --skip-arns-check`)
+    }
+
+    /*
+     * The record update is a Solana transaction, and the ArNS key pays its
+     * fee. A key holding no SOL at all, such as a fresh `keygen` wallet, would
+     * upload and then fail the update, so it is refused here. As with the ANT
+     * read, a balance that cannot be read leaves the update as the check.
+     */
+    let lamports: bigint | undefined
+    try {
+      lamports = await getLamports(rpc, signer.address)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      spinner.warn(
+        `Could not read the SOL balance of ${signer.address} (${message}); not checking it`,
+      )
+    }
+
+    if (lamports === 0n) {
+      spinner.fail('ArNS key holds no SOL')
+      this.error(
+        `The ArNS key ${signer.address} holds no SOL on ${cluster}, and the record update is a Solana transaction that key pays the fee for. Nothing was uploaded. Send that address a small amount of SOL, or pass --arns-wallet with a key that holds some.`,
+      )
     }
 
     return {
