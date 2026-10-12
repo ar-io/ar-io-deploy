@@ -111,13 +111,15 @@ export function createArioRpc(cluster: SolanaCluster, rpcUrl?: string) {
 
 /**
  * A wallet's SOL balance in lamports. The ArNS key pays the fee for the
- * record update, so a key holding none cannot make it.
+ * record update, so a key holding none cannot make it. Read at `confirmed`,
+ * not the RPC default of `finalized`, so a wallet funded seconds ago is not
+ * read as empty.
  */
 export async function getLamports(
   rpc: ReturnType<typeof createArioRpc>,
   address: string,
 ): Promise<bigint> {
-  const { value } = await rpc.getBalance(address as Address).send()
+  const { value } = await rpc.getBalance(address as Address, { commitment: 'confirmed' }).send()
   return value
 }
 
