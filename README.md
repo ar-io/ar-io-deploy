@@ -27,7 +27,7 @@ DEPLOY_KEY=<solana-base58-key> ario-deploy deploy --deploy-folder ./dist --arns-
 
 The deploy prints the manifest id, and your site is at `https://turbo-gateway.com/<manifest id>`.
 
-With `--arns-name myapp`, it is also at `https://myapp.ar.io`. For that, the wallet must own the name or be a controller of it. Get a name at https://arns.ar.io.
+With `--arns-name myapp`, it is also at `https://myapp.ar.io`. For that, the wallet must own the name or be a controller of it, and it must hold a little SOL: the record update is a Solana transaction, and the wallet pays its fee. A wallet fresh from `keygen` holds none, so `deploy` refuses before it uploads anything. Get a name at https://arns.ar.io.
 
 ## Table of Contents
 
