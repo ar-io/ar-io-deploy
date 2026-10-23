@@ -126,6 +126,13 @@ runs:
       uses: actions/setup-node@v5
       with:
         node-version: '22'
+        # Without this, setup-node takes the newest 22.x already in the
+        # runner's tool cache, which can be days behind a Node security
+        # release (CVE-2026-111497, fixed in 22.23.4, was a Brotli decoder
+        # bug, and the CLI's fetch calls decode Brotli). With it, setup-node
+        # resolves the newest 22.x from the versions manifest and downloads
+        # it when the cache is stale.
+        check-latest: true
         # setup-node@v5 auto-caches when the repo's package.json declares a
         # `packageManager`, and fails the run if the matching lockfile is
         # absent. This action only needs a Node runtime to install its own
