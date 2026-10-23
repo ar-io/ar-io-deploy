@@ -24,6 +24,22 @@ function stepScript(stepName: string): string {
   return body.join('\n')
 }
 
+/** The `with:` inputs of a step, as written in action.yml (comments dropped). */
+function stepInputs(stepName: string): Record<string, string> {
+  const lines = fs.readFileSync(path.join(process.cwd(), 'action.yml'), 'utf8').split('\n')
+  const start = lines.findIndex((line) => line.trim() === `- name: ${stepName}`)
+  const withAt = lines.findIndex((line, index) => index > start && line.trim() === 'with:')
+  const inputs: Record<string, string> = {}
+  for (const line of lines.slice(withAt + 1)) {
+    if (line.trim() === '' || line.trim().startsWith('#')) continue
+    if (!line.startsWith('        ')) break
+    const [key, value] = line.trim().split(/:\s*(.*)/s)
+    inputs[key] = value
+  }
+
+  return inputs
+}
+
 const TX_ID = 'AbCdEfGhIjKlMnOpQrStUvWxYz0123456789_-abcde'
 /** Another 43-character id the CLI prints before the deploy's own. */
 const FUND_TX_ID = 'F'.repeat(43)
@@ -114,5 +130,13 @@ describe('the action deploy step', () => {
 
     expect(status).toBe(2)
     expect(outputs['tx-id']).toBe(TX_ID)
+  })
+})
+
+describe('the action Node.js setup', () => {
+  // setup-node otherwise reuses the newest 22.x in the runner's tool cache, which can
+  // predate a Node security release by days (CVE-2026-111497, fixed in 22.23.4).
+  it('resolves the newest patch release of its Node line', () => {
+    expect(stepInputs('Setup Node.js')['check-latest']).toBe('true')
   })
 })

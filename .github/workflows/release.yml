@@ -46,6 +46,9 @@ jobs:
         uses: actions/setup-node@v5
         with:
           node-version: '22'
+          # The newest 22.x, so a release never builds and publishes on a Node
+          # the runner image cached before a security release.
+          check-latest: true
           registry-url: https://registry.npmjs.org
           cache: 'pnpm'
 
